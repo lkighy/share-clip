@@ -1,0 +1,52 @@
+{
+  "productName": "share-clip",
+  "version": "0.0.0",
+  "identifier": "com.tauri.dev",
+  "build": {
+    "beforeDevCommand": "yarn dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "yarn build",
+    "frontendDist": "../dist"
+  },
+  "app": {"windows": [
+      {
+        "title": "剪切板",
+        "label": "index",
+        "url": "index.html",
+        "width": 360,
+        "height": 600,
+        "visible": false
+      },
+      {
+        "title": "设置",
+        "label": "setting",
+        "url": "setting.html",
+        "width": 800,
+        "height": 600,
+        "visible": false
+      },
+    {
+      "title": "共享文件",
+      "label": "share_file",
+      "url": "file_share.html",
+      "width": 800,
+      "height": 600,
+      "visible": false
+    }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  }
+}
