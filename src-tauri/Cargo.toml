@@ -18,7 +18,9 @@ serde_json = "1"
 [target."cfg(not(any(target_os = \"android\", target_os = \"ios\")))".dependencies]
 tauri-plugin-global-shortcut = "2.0.0-beta"
 tokio = { version = "1", features = ["full"] }
-sea-orm = "0.12"
-sea-orm-migration = "0.12"
-sea-orm-macros = "0.12"
-sqlite = { version = "0.36", features = ["default"] }
+sea-orm = {version = "0.12", features = ["macros", "sqlx-sqlite", "runtime-tokio-native-tls"] }
+chrono = { version = "0.4", features = ["serde"] }
+strum = "0.26"
+strum_macros = "0.26"
+#sea-orm-migration = "0.12"
+#sea-orm-macros = "0.12"

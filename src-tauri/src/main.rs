@@ -2,7 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod clipboard;
-mod entities;
+mod entity;
 
 use tauri::{
     Manager,
@@ -20,21 +20,46 @@ fn greet(name: &str) -> String {
 
 
 fn main() {
-
+    // .with_shortcuts(["alt+shift+v"]).unwrap()
+    //     .with_handler(|app, shortcut, _event| {
+    //         println!("触发快捷键按钮: {:?}", shortcut);
+    //         if shortcut.matches(Modifiers::META, Code::KeyV) {
+    //             if let Some(index) = app.get_webview_window("index") {
+    //                 let _ = index.show();
+    //                 let _ = index.set_focus();
+    //             }
+    //         }
+    //     })
     tauri::Builder::default()
-        .plugin(tauri_plugin_global_shortcut::Builder::new().with_shortcuts(["ctrl+v", "Command+v"]).unwrap()
-            .with_handler(|app, shortcut, _event| {
-                println!("触发快捷键按钮: {:?}", shortcut);
-                if shortcut.matches(Modifiers::CONTROL, Code::KeyV) {
-                    if let Some(index) = app.get_webview_window("index") {
-                        let _ = index.show();
-                        let _ = index.set_focus();
-                    }
-                }
-        }).build())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
-            let _ = app.global_shortcut().register("ctrl+v");
-            let _ = app.global_shortcut().register("Command+v");
+            // 检查快捷键注册
+            // let shortcut = "ctrl+v";
+            // if app.global_shortcut().is_registered(shortcut) {
+            //     let _ = app.global_shortcut().register(shortcut);
+            // }
+            // let shortcut = "Command+v";
+            // if app.global_shortcut().is_registered(shortcut) {
+            //     let _ = app.global_shortcut().register(shortcut);
+            // }
+            println!("ctrl+v 按钮注册：{:?}",  app.global_shortcut().is_registered("ctrl+v"));
+            println!("alt+shift+v 按钮注册：{:?}",  app.global_shortcut().is_registered("alt+shift+v"));
+            println!("command+v 按钮注册：{:?}",  app.global_shortcut().is_registered("command+v"));
+
+            app.global_shortcut().
+
+            let shortcut = "command+v";
+            match app.global_shortcut().on_shortcut(shortcut, |app, shortcut, _event| {
+                println!("触发快捷键按钮: {:?}", shortcut);
+            }) {
+                Ok(_) => {
+                    println!("快捷键 {} 注册成功", shortcut);
+                }
+                Err(e) => {
+                    eprintln!("注册快捷键 {} 失败：{:?}", shortcut, e);
+                }
+            }
+
             // 设置剪切板
             let setting_item = MenuItemBuilder::with_id("setting", "设置").build(app)?;
             let quit_item = MenuItemBuilder::with_id("quit", "退出").build(app)?;
@@ -54,16 +79,6 @@ fn main() {
                     }
                     _ => (),
                 })
-                // 这里是对系统托盘图标进行单机时的事件，如果需要可以在这里进行监听
-                // .on_tray_icon_event(|tray, event| {
-                //     if event.click_type == ClickType::Left {
-                //         let app = tray.app_handle();
-                //         if let Some(webview_window) = app.get_webview_window("index") {
-                //             let _ = webview_window.show();
-                //             let _ = webview_window.set_focus();
-                //         }
-                //     }
-                // })
                 .build(app)?;
             Ok(())
         })
