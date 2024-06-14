@@ -3,6 +3,7 @@
 
 mod clipboard;
 mod entity;
+mod config;
 
 use tauri::{
     Manager,
@@ -46,7 +47,18 @@ fn main() {
             println!("alt+shift+v 按钮注册：{:?}",  app.global_shortcut().is_registered("alt+shift+v"));
             println!("command+v 按钮注册：{:?}",  app.global_shortcut().is_registered("command+v"));
 
-            app.global_shortcut().
+            let shortcut = "ctrl+c";
+            // app.global_shortcut().on
+            match app.global_shortcut().on_shortcut("command+c", |app, shortcut, _event| {
+               println!("触发了复制内容：{:?}", shortcut);
+            }) {
+                Ok(_) => {
+                    println!("快捷键 {} 注册成功", shortcut);
+                }
+                Err(e) => {
+                    eprintln!("注册快捷键 {} 失败：{:?}", shortcut, e);
+                }
+            }
 
             let shortcut = "command+v";
             match app.global_shortcut().on_shortcut(shortcut, |app, shortcut, _event| {
