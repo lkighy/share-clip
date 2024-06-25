@@ -7,6 +7,7 @@ This template should help get you started developing with Tauri + Vue 3 in Vite.
 - [VS Code](https://code.visualstudio.com/) + [Volar](https://marketplace.visualstudio.com/items?itemName=Vue.volar) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
 
 ## 项目目录结构
+```
 my-tauri-clipboard-app/
 ├── src/
 │   ├── assets/                   # 静态资源（图标、图片等）
@@ -34,3 +35,4 @@ my-tauri-clipboard-app/
 ├── package.json                  # 项目配置文件
 ├── Cargo.toml                    # Rust 项目配置文件
 └── README.md                     # 项目说明文件
+```
