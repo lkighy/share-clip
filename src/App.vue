@@ -1,34 +1,37 @@
 <script setup>
 // This starter template is using Vue 3 <script setup> SFCs
 // Check out https://vuejs.org/api/sfc-script-setup.html#script-setup
-import Greet from "./components/Greet.vue";
-import { get_clip_text } from "./api/clipboard.js";
-import { ref, onMounted } from "vue";
+import {get_clip_text} from "./api/clipboard.js";
+import {onMounted, onUnmounted, ref} from "vue";
+import ClipboardItem from "./components/ClipboardItem.vue";
+import {Window} from "@tauri-apps/api/window";
+import {WebviewWindow} from "@tauri-apps/api/webviewWindow";
+import {listen, TauriEvent} from "@tauri-apps/api/event";
 
 const data = ref("");
+const info = ref('没触发');
 onMounted(async () => {
-    try {
-        const response = await get_clip_text();
-        data.value = response;
+  const focus = await WebviewWindow.getCurrent().once(TauriEvent.WINDOW_FOCUS, () => {
+    console.log('触发 focus')
+  })
+  console.log('什么内容');
+  focus()
+  // await WebviewWindow.getCurrent().listen('focus', (event) => {
+  //   info.value = 'WebviewWindow 触发 focus';
+  // })
+})
+onUnmounted(() => {
+  info.value = '触发 onUnmounted';
 
-    } catch (error) {
-      this.$message.error(error)
-    }
 })
 </script>
 
 <template>
   <div class="container">
-    {{ data }}
+    <ClipboardItem :content="data" />
+    {{ info }}
   </div>
 </template>
 
 <style scoped>
-.logo.vite:hover {
-  filter: drop-shadow(0 0 2em #747bff);
-}
-
-.logo.vue:hover {
-  filter: drop-shadow(0 0 2em #249b73);
-}
 </style>

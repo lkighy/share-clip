@@ -15,7 +15,8 @@
         "url": "index.html",
         "width": 360,
         "height": 600,
-        "visible": false
+        "visible": false,
+        "alwaysOnTop": true
       },
       {
         "title": "设置",

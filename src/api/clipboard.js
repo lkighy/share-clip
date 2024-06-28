@@ -2,6 +2,6 @@
 
 import {invoke} from "@tauri-apps/api/core";
 
-async function get_clip_text() {
+export async function get_clip_text() {
     return await invoke("get_clipboard_text")
 }

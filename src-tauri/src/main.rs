@@ -4,6 +4,7 @@
 mod clipboard;
 mod entity;
 mod config;
+mod utils;
 
 use tauri::{
     Manager,
@@ -11,6 +12,7 @@ use tauri::{
     tray::{TrayIconBuilder},
 };
 use tauri_plugin_global_shortcut::{Modifiers, Code, GlobalShortcutExt};
+use crate::utils::toggle_window_visibility;
 
 // Learn more about Tauri commands at https://tauri.app/v1/guides/features/command
 #[tauri::command]
@@ -21,61 +23,31 @@ fn greet(name: &str) -> String {
 
 
 fn main() {
-    // .with_shortcuts(["alt+shift+v"]).unwrap()
-    //     .with_handler(|app, shortcut, _event| {
-    //         println!("触发快捷键按钮: {:?}", shortcut);
-    //         if shortcut.matches(Modifiers::META, Code::KeyV) {
-    //             if let Some(index) = app.get_webview_window("index") {
-    //                 let _ = index.show();
-    //                 let _ = index.set_focus();
-    //             }
-    //         }
-    //     })
     tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
-            // TODO: 注册数据的问题，还有什么内容的处理问题
-            // TODO: 注册的按钮应该处理的方式
-            // 1. 唤醒的是唤出剪切板
-            // 2. 唤醒的是唤出文件分享
             // 检查快捷键注册
-            // let shortcut = "ctrl+v";
-            // if app.global_shortcut().is_registered(shortcut) {
-            //     let _ = app.global_shortcut().register(shortcut);
-            // }
-            // let shortcut = "Command+v";
-            // if app.global_shortcut().is_registered(shortcut) {
-            //     let _ = app.global_shortcut().register(shortcut);
-            // }
-            println!("ctrl+v 按钮注册：{:?}",  app.global_shortcut().is_registered("ctrl+v"));
-            println!("alt+shift+v 按钮注册：{:?}",  app.global_shortcut().is_registered("alt+shift+v"));
-            println!("command+v 按钮注册：{:?}",  app.global_shortcut().is_registered("command+v"));
-
-            let shortcut = "ctrl+c";
-            // app.global_shortcut().on
-            match app.global_shortcut().on_shortcut("command+c", |app, shortcut, _event| {
-               println!("触发了复制内容：{:?}", shortcut);
-            }) {
-                Ok(_) => {
-                    println!("快捷键 {} 注册成功", shortcut);
-                }
-                Err(e) => {
-                    eprintln!("注册快捷键 {} 失败：{:?}", shortcut, e);
-                }
+            let shortcut = "ctrl+alt+v";
+            if app.global_shortcut().is_registered(shortcut) {
+                let _ = app.global_shortcut().register(shortcut);
             }
-
-            let shortcut = "command+v";
-            match app.global_shortcut().on_shortcut(shortcut, |app, shortcut, _event| {
-                println!("触发快捷键按钮: {:?}", shortcut);
-            }) {
-                Ok(_) => {
-                    println!("快捷键 {} 注册成功", shortcut);
+            let _ = app.global_shortcut().on_shortcut(shortcut, |app, shortcut, _| {
+                if let Some(window) = app.get_webview_window("index") {
+                    toggle_window_visibility(&window);
                 }
-                Err(e) => {
-                    eprintln!("注册快捷键 {} 失败：{:?}", shortcut, e);
-                }
+            });
+            let shortcut = "f12";
+            if app.global_shortcut().is_registered(shortcut) {
+                let _ = app.global_shortcut().register(shortcut);
             }
+            let _ = app.global_shortcut().on_shortcut(shortcut, |app, shortcut, _| {
+               if let Some(window) = app.get_webview_window("index") {
+                   if let Ok(true) = window.is_visible() {
+                       window.open_devtools();
+                   }
+               }
+            });
 
             // 设置剪切板
             let clipboard_item = MenuItemBuilder::with_id("clipboard", "剪切板").build(app)?;
@@ -88,17 +60,15 @@ fn main() {
                 .on_menu_event(move |app, event| match event.id().as_ref() {
                     "clipboard" => {
                         if let Some(window) = app.get_webview_window("index") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
+                            toggle_window_visibility(&window);
                         }
                     }
                     "quit" => {
                         app.exit(0)
                     }
                     "setting" => {
-                        if let Some(webview_window) = app.get_webview_window("setting") {
-                            let _ = webview_window.show();
-                            let _ = webview_window.set_focus();
+                        if let Some(window) = app.get_webview_window("setting") {
+                            toggle_window_visibility(&window);
                         }
                     }
                     _ => (),
