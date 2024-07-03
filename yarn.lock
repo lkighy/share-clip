@@ -207,15 +207,10 @@
   resolved "https://registry.yarnpkg.com/@rollup/rollup-win32-x64-msvc/-/rollup-win32-x64-msvc-4.18.0.tgz#5d694d345ce36b6ecf657349e03eb87297e68da4"
   integrity sha512-UOo5FdvOL0+eIVTgS4tIdbW+TtnBLWg1YBCcU2KWM7nuNwRz9bksDX1bekJJCpu25N1DVWaCwnT39dVQxzqS8g==
 
-"@tauri-apps/api@2.0.0-beta.11":
-  version "2.0.0-beta.11"
-  resolved "https://registry.yarnpkg.com/@tauri-apps/api/-/api-2.0.0-beta.11.tgz#7ec6f6f007da4e55315270619448ce39fd11b4e3"
-  integrity sha512-wJRY+fBUm3KpqZDHMIz5HRv+1vlnvRJ/dFxiyY3NlINTx2qXqDou5qWYcP1CuZXsd39InWVPV3FAZvno/kGCkA==
-
-"@tauri-apps/api@>=2.0.0-beta.0":
-  version "2.0.0-beta.12"
-  resolved "https://registry.yarnpkg.com/@tauri-apps/api/-/api-2.0.0-beta.12.tgz#0b552086e6382cfd5798537b304d00cbf42db7a1"
-  integrity sha512-77OvAnsExtiprnjQcvmDyZGfnIvMF/zVL5+8Vkl1R8o8E3iDtvEJZpbbH1F4dPtNa3gr4byp/5dm8hAa1+r3AA==
+"@tauri-apps/api@2.0.0-beta.14", "@tauri-apps/api@>=2.0.0-beta.0":
+  version "2.0.0-beta.14"
+  resolved "https://registry.yarnpkg.com/@tauri-apps/api/-/api-2.0.0-beta.14.tgz#8c1c65c07559cd29c5103a99e0abe5331cc2246f"
+  integrity sha512-YLYgHqdwWswr4Y70+hRzaLD6kLIUgHhE3shLXNquPiTaQ9+cX3Q2dB0AFfqsua6NXYFNe7LfkmMzaqEzqv3yQg==
 
 "@tauri-apps/cli-darwin-arm64@2.0.0-beta.18":
   version "2.0.0-beta.18"
@@ -284,11 +279,11 @@
     "@tauri-apps/cli-win32-x64-msvc" "2.0.0-beta.18"
 
 "@tauri-apps/plugin-shell@>=2.0.0-beta.0":
-  version "2.0.0-beta.4"
-  resolved "https://registry.yarnpkg.com/@tauri-apps/plugin-shell/-/plugin-shell-2.0.0-beta.4.tgz#4956e61b78df4ca1b695b7e0aeb9f00efeed06c2"
-  integrity sha512-y9APB3ZLtkY4IM6syE+dn/R4XR2UTHBcAI/n9L5PgnvOjJAuuEzVYURn10G51nKnLw+sFbxO7LW4VW66Uoaa9g==
+  version "2.0.0-beta.7"
+  resolved "https://registry.yarnpkg.com/@tauri-apps/plugin-shell/-/plugin-shell-2.0.0-beta.7.tgz#43159959ff8ef83435df6d64be381606f6e02130"
+  integrity sha512-oJxWbEiNRcoMM0PrePjJnjPHEAN1sbYuWaQ1QMtLPdjHsl83RLk+RpFzkL5WvtGknfiKY7T2qEthOID4br+mvg==
   dependencies:
-    "@tauri-apps/api" "2.0.0-beta.11"
+    "@tauri-apps/api" "2.0.0-beta.14"
 
 "@types/estree@1.0.5":
   version "1.0.5"

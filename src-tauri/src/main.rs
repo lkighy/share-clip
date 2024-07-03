@@ -27,6 +27,8 @@ fn main() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
+            // TODO: 通过 tokio 定时执行的任务，以及设置
+
             // 检查快捷键注册
             let shortcut = "ctrl+alt+v";
             if app.global_shortcut().is_registered(shortcut) {

@@ -8,7 +8,9 @@
     "beforeBuildCommand": "yarn build",
     "frontendDist": "../dist"
   },
-  "app": {"windows": [
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
       {
         "title": "剪切板",
         "label": "index",
