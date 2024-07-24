@@ -1,7 +1,7 @@
 use chrono::NaiveDateTime;
 // use sea_orm::{ActiveModelBehavior, DeriveEntityModel, DeriveRelation, EnumIter};
-use sea_orm::entity::prelude::*;
 use crate::entity::status::ClipboardType;
+use sea_orm::entity::prelude::*;
 use sea_orm::EntityTrait;
 use sea_orm::PrimaryKeyTrait;
 // 剪切板结构
@@ -20,10 +20,7 @@ pub struct Model {
     pub updated_at: NaiveDateTime,
 }
 
-
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-pub enum Relation {
-}
-
+pub enum Relation {}
 
 impl ActiveModelBehavior for ActiveModel {}

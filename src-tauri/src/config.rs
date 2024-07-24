@@ -6,7 +6,7 @@ use tauri_plugin_global_shortcut::GlobalShortcutExt;
 /// 关键字
 pub fn register_clip_shortcut_key(app: &mut App, shortcut: &str) -> bool {
     if !app.global_shortcut().is_registered(shortcut) {
-        return false
+        return false;
     }
 
     //

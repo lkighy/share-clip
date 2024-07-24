@@ -2,7 +2,9 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Capability for the main window",
-  "windows": ["index"],
+  "windows": [
+    "index"
+  ],
   "permissions": [
     "path:default",
     "event:default",
@@ -17,6 +19,7 @@
     "shell:allow-open",
     "global-shortcut:allow-is-registered",
     "global-shortcut:allow-register",
-    "global-shortcut:allow-unregister"
+    "global-shortcut:allow-unregister",
+    "store:default"
   ]
 }
