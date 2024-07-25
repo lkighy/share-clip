@@ -1,0 +1,7 @@
+[shortcuts]
+clipboard = 'ctrl+alt+v'
+file_share = 'f10'
+
+[variables]
+app_name = '共享剪切板'
+version = '1.0.0'

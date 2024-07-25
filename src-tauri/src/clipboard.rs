@@ -18,19 +18,22 @@ pub struct TaskManager {
     duration: Mutex<Duration>,
     /// 数据库链接
     //
+    app: AppHandle,
 }
 
 impl TaskManager {
-    pub fn new() -> Self {
+    pub fn new(app: AppHandle) -> Self {
         TaskManager {
             state: Mutex::new(TaskState::Running),
-            duration: Mutex::new(Duration::from_millis(500))
+            duration: Mutex::new(Duration::from_millis(500)),
+            app
         }
     }
     pub async fn start(&self) {
         let mut state = self.state.lock().await;
         *state = TaskState::Running;
         drop(state); // 解锁状态
+        println!("开始执行遍历任务");
 
         // 后台任务循环
         loop {
@@ -50,6 +53,16 @@ impl TaskManager {
             }
 
             // TODO: 执行后台任务
+            let clip_text = self.app.clipboard().read_text();
+            match clip_text {
+                Ok(value) => {
+                    println!("当前剪切板上的内容为：{}", value);
+                }
+                Err(e) => {
+                    println!("获取剪切板内容失败: {:?}", e);
+                }
+            }
+            // TODO: 读取
 
             time::sleep(duration).await;
         }
