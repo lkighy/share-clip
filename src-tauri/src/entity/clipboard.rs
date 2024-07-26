@@ -12,6 +12,8 @@ pub struct Model {
     pub id: i32,
     /// 复制的内容
     pub content: String,
+    /// TODO: 原数据，在 富文本或HTML中，则表示为原数据，在文件图片中，则表示为
+
     /// 复制的内容的类型
     pub content_type: ClipboardType,
     /// 创建时间

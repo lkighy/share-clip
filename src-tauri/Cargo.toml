@@ -24,5 +24,6 @@ sea-orm = {version = "0.12", features = ["macros", "sqlx-sqlite", "runtime-tokio
 chrono = { version = "0.4", features = ["serde"] }
 strum = "0.26"
 strum_macros = "0.26"
+clipboard-rs = "0.1.9" # 剪切板
 #sea-orm-migration = "0.12"
 #sea-orm-macros = "0.12"
