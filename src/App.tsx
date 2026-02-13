@@ -1,7 +1,14 @@
 import { useState } from "react";
-import reactLogo from "./assets/react.svg";
 import { invoke } from "@tauri-apps/api/core";
-import "./App.css";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 
 function App() {
   const [greetMsg, setGreetMsg] = useState("");
@@ -13,24 +20,14 @@ function App() {
   }
 
   return (
-    <main className="container">
-      <h1>Welcome to Tauri + React</h1>
-
-      <div className="row">
-        <a href="https://vite.dev" target="_blank">
-          <img src="/vite.svg" className="logo vite" alt="Vite logo" />
-        </a>
-        <a href="https://tauri.app" target="_blank">
-          <img src="/tauri.svg" className="logo tauri" alt="Tauri logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <p>Click on the Tauri, Vite, and React logos to learn more.</p>
+    <main className="mx-auto flex min-h-screen w-full max-w-2xl flex-col gap-8 px-6 py-16">
+      <header className="space-y-2">
+        <h1 className="text-3xl font-semibold tracking-tight">Share Clip</h1>
+        <p className="text-sm text-muted-foreground">shadcn/ui + Radix primitives 已接入。</p>
+      </header>
 
       <form
-        className="row"
+        className="flex gap-2"
         onSubmit={(e) => {
           e.preventDefault();
           greet();
@@ -38,12 +35,28 @@ function App() {
       >
         <input
           id="greet-input"
+          className="h-9 flex-1 rounded-md border border-input bg-background px-3 text-sm"
           onChange={(e) => setName(e.currentTarget.value)}
           placeholder="Enter a name..."
         />
-        <button type="submit">Greet</button>
+        <Button type="submit">Greet</Button>
       </form>
-      <p>{greetMsg}</p>
+
+      <p className="text-sm text-muted-foreground">{greetMsg}</p>
+
+      <Dialog>
+        <DialogTrigger asChild>
+          <Button variant="secondary">打开 Radix Dialog 示例</Button>
+        </DialogTrigger>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Radix Primitive 已可用</DialogTitle>
+            <DialogDescription>
+              当前对话框由 `@radix-ui/react-dialog` 构建，样式来自 shadcn/ui 组件模式。
+            </DialogDescription>
+          </DialogHeader>
+        </DialogContent>
+      </Dialog>
     </main>
   );
 }
