@@ -2,16 +2,17 @@ mod app;
 mod db;
 mod entity;
 mod platform;
+mod error;
+mod models;
 
-use std::sync::atomic::AtomicBool;
-use app::commands::greet;
 use app::config::load_or_create_config;
 use app::shortcuts::global::init_register_shortcut;
 use app::ui::tray::init_menu;
 use app::ui::window::init_app;
+use app::commands::clipboard;
 use db::{init_db, DbState};
 use tauri::Manager;
-use crate::app::shortcuts::global::init_hide_register_shortcut_event;
+// use crate::app::shortcuts::global::init_hide_register_shortcut_event;
 // use crate::app::shortcuts::global::ShortcutState;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -31,12 +32,14 @@ pub fn run() {
             app.manage(DbState { conn: db });
             init_app(app);
             init_register_shortcut(app);
-            init_hide_register_shortcut_event(app);
+            // init_hide_register_shortcut_event(app);
             init_menu(app);
             Ok(())
         })
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![greet])
+        .invoke_handler(tauri::generate_handler![
+            clipboard::paste,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

@@ -1,3 +1,4 @@
+use crate::platform::non_activating::windows::show_window_non_activating;
 use std::sync::atomic::{AtomicBool, Ordering};
 use crate::app::config::AppConfig;
 use crate::platform::system_info;
@@ -31,52 +32,219 @@ pub fn init_register_shortcut(app: &App) {
                     #[cfg(target_os = "windows")]
                     {
                         let data = system_info::caret::get_ui_automation_pos();
-                        if let Some((left, _top, _right, bottom)) = data {
-                            let monitor_bounds =
+                        if let Some((left, top, right, bottom)) = data {
+                            let (screen_left, screen_top, screen_right, screen_bottom) =
                                 system_info::caret::get_monitor_bounds_by_point(app, left, bottom);
 
-                            let (screen_left, screen_top, screen_right, screen_bottom) =
-                                monitor_bounds;
-
-                            let mut win_x = left;
-                            if win_x + window_width > screen_right {
-                                win_x = screen_right - window_width;
-                            }
-                            if win_x < screen_left {
-                                win_x = screen_left;
-                            }
-
-                            let mut win_y = bottom + spacing;
-                            if win_y + window_height > screen_bottom {
-                                win_y = screen_bottom - window_height;
-                            }
-                            if win_y < screen_top {
-                                win_y = screen_top;
-                            }
+                            let (win_x, win_y) = compute_best_window_position(
+                                left, top, right, bottom,
+                                window_width, window_height,
+                                spacing,
+                                screen_left, screen_top, screen_right, screen_bottom,
+                            );
 
                             let _ = window.set_position(Position::Logical((win_x, win_y).into()));
                         }
+
+                        show_window_non_activating(&window); // 不激活显示
                     }
 
-                    let _ = window.show();
+                    #[cfg(not(target_os = "windows"))]
+                    let _ = window.show(); // 其他平台保持原有逻辑
                 }
             }
         });
 }
 
-/// 监听窗口失去焦点事件
-pub fn init_hide_register_shortcut_event(app: &App) {
-    if let Some(window) = app.get_window("index") {
-        let window_clone = window.clone();
+// 在 init_register_shortcut 函数内部或作为辅助函数
+fn compute_best_window_position(
+    cursor_left: i32,
+    cursor_top: i32,
+    cursor_right: i32,
+    cursor_bottom: i32,
+    window_width: i32,
+    window_height: i32,
+    spacing: i32,
+    screen_left: i32,
+    screen_top: i32,
+    screen_right: i32,
+    screen_bottom: i32,
+) -> (i32, i32) {
+    let ctx = LayoutContext {
+        window_width,
+        window_height,
+        spacing,
+        screen_left,
+        screen_top,
+        screen_right,
+        screen_bottom,
+        cursor_left,
+        cursor_top,
+        cursor_right,
+        cursor_bottom,
+    };
 
-        window.on_window_event(move |event| {
-            if let WindowEvent::Focused(false) = event {
-                println!("触发失去焦点事件");
-                let _ = window_clone.hide();
-            }
-        })
+
+    // 定义候选位置生成器：每个候选返回 (x, y) 和是否优先考虑
+    let candidates: [fn(&LayoutContext) -> (i32, i32); 4] = [
+        position_bottom,
+        position_top,
+        position_left,
+        position_right,
+    ];
+
+    // 尝试每个候选位置，检查是否遮挡光标
+    for (i, candidate) in candidates.iter().enumerate() {
+        let (win_x, win_y) = candidate(&ctx);
+
+        let overlap = !(win_x + ctx.window_width <= ctx.cursor_left
+            || win_x >= ctx.cursor_right
+            || win_y + ctx.window_height <= ctx.cursor_top
+            || win_y >= ctx.cursor_bottom);
+
+        if !overlap || i == candidates.len() - 1 {
+            return (win_x, win_y);
+        }
     }
+
+    // 默认返回下方位置（理论上不会执行到这里）
+    let mut win_x = cursor_left;
+    let mut win_y = cursor_bottom + spacing;
+    if win_x + window_width > screen_right { win_x = screen_right - window_width; }
+    if win_x < screen_left { win_x = screen_left; }
+    if win_y + window_height > screen_bottom { win_y = screen_bottom - window_height; }
+    if win_y < screen_top { win_y = screen_top; }
+    (win_x, win_y)
 }
+
+struct LayoutContext {
+    window_width: i32,
+    window_height: i32,
+    spacing: i32,
+    screen_left: i32,
+    screen_top: i32,
+    screen_right: i32,
+    screen_bottom: i32,
+    cursor_left: i32,
+    cursor_top: i32,
+    cursor_right: i32,
+    cursor_bottom: i32,
+}
+
+/// 下方
+fn position_bottom(ctx: &LayoutContext) -> (i32, i32) {
+    let mut win_x = ctx.cursor_left;
+    let mut win_y = ctx.cursor_bottom + ctx.spacing;
+
+    // 水平修正
+    if win_x + ctx.window_width > ctx.screen_right {
+        win_x = ctx.screen_right - ctx.window_width;
+    }
+    if win_x < ctx.screen_left {
+        win_x = ctx.screen_left;
+    }
+
+    // 垂直修正
+    if win_y + ctx.window_height > ctx.screen_bottom {
+        win_y = ctx.screen_bottom - ctx.window_height;
+    }
+    if win_y < ctx.screen_top {
+        win_y = ctx.screen_top;
+    }
+
+    (win_x, win_y)
+}
+
+/// 上方
+fn position_top(ctx: &LayoutContext) -> (i32, i32) {
+    let mut win_x = ctx.cursor_left;
+    let mut win_y = ctx.cursor_top - ctx.window_height - ctx.spacing;
+
+    // 水平修正
+    if win_x + ctx.window_width > ctx.screen_right {
+        win_x = ctx.screen_right - ctx.window_width;
+    }
+    if win_x < ctx.screen_left {
+        win_x = ctx.screen_left;
+    }
+
+    // 垂直修正
+    if win_y < ctx.screen_top {
+        win_y = ctx.screen_top;
+    }
+    if win_y + ctx.window_height > ctx.screen_bottom {
+        win_y = ctx.screen_bottom - ctx.window_height;
+    }
+
+    (win_x, win_y)
+}
+
+/// 左侧
+fn position_left(ctx: &LayoutContext) -> (i32, i32) {
+    let cursor_center_y = (ctx.cursor_top + ctx.cursor_bottom) / 2;
+
+    let mut win_y = cursor_center_y - ctx.window_height / 2;
+    let mut win_x = ctx.cursor_left - ctx.window_width - ctx.spacing;
+
+    // 垂直修正
+    if win_y < ctx.screen_top {
+        win_y = ctx.screen_top;
+    }
+    if win_y + ctx.window_height > ctx.screen_bottom {
+        win_y = ctx.screen_bottom - ctx.window_height;
+    }
+
+    // 水平修正
+    if win_x < ctx.screen_left {
+        win_x = ctx.screen_left;
+    }
+    if win_x + ctx.window_width > ctx.screen_right {
+        win_x = ctx.screen_right - ctx.window_width;
+    }
+
+    (win_x, win_y)
+}
+
+/// 右侧
+fn position_right(ctx: &LayoutContext) -> (i32, i32) {
+    let cursor_center_y = (ctx.cursor_top + ctx.cursor_bottom) / 2;
+
+    let mut win_y = cursor_center_y - ctx.window_height / 2;
+    let mut win_x = ctx.cursor_right + ctx.spacing;
+
+    // 垂直修正
+    if win_y < ctx.screen_top {
+        win_y = ctx.screen_top;
+    }
+    if win_y + ctx.window_height > ctx.screen_bottom {
+        win_y = ctx.screen_bottom - ctx.window_height;
+    }
+
+    // 水平修正
+    if win_x + ctx.window_width > ctx.screen_right {
+        win_x = ctx.screen_right - ctx.window_width;
+    }
+    if win_x < ctx.screen_left {
+        win_x = ctx.screen_left;
+    }
+
+    (win_x, win_y)
+}
+
+
+// /// 监听窗口失去焦点事件
+// pub fn init_hide_register_shortcut_event(app: &App) {
+//     if let Some(window) = app.get_window("index") {
+//         let window_clone = window.clone();
+//
+//         window.on_window_event(move |event| {
+//             if let WindowEvent::Focused(false) = event {
+//                 println!("触发失去焦点事件");
+//                 let _ = window_clone.hide();
+//             }
+//         })
+//     }
+// }
 
 // 需要在应用启动时托管的状态
 // pub struct ShortcutState {

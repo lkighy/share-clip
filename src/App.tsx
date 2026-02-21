@@ -19,6 +19,10 @@ function App() {
     setGreetMsg(await invoke("greet", { name }));
   }
 
+  async function paste() {
+      setGreetMsg(await invoke("paste"))
+  }
+
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-2xl flex-col gap-8 px-6 py-16">
       <header className="space-y-2">
@@ -43,6 +47,7 @@ function App() {
       </form>
 
       <p className="text-sm text-muted-foreground">{greetMsg}</p>
+        <Button type="submit" onClick={paste}>粘贴</Button>
 
       <Dialog>
         <DialogTrigger asChild>

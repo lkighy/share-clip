@@ -12,3 +12,9 @@ This template should help get you started developing with Tauri, React and Types
 - `platform/`: 平台能力封装，放置与操作系统相关的实现（如非激活窗口、系统信息与光标位置获取等）。
 - `lib.rs`: Tauri 应用主入口，负责组装插件、注册命令、初始化配置与启动流程。
 - `main.rs`: 可执行入口，调用 `share_clip_lib::run()` 启动应用。
+
+
+## sea-orm 迁移方式
+```shell
+sea-orm-cli generate entity -u sqlite://share_clip.db?mode=rwc -o src/entity
+```
