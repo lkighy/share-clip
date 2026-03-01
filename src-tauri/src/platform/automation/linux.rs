@@ -1,8 +1,9 @@
 use std::path::PathBuf;
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use enigo::{Enigo, Key, KeyboardControllable};
 use arboard::Clipboard;
-use crate::automation::InjectContent;
+use clipboard_rs::{Clipboard as _, ClipboardContext};
+use crate::platform::automation::InjectContent;
 
 pub fn inject(content: InjectContent) -> Result<()> {
     let mut clipboard = Clipboard::new()?;
@@ -10,6 +11,12 @@ pub fn inject(content: InjectContent) -> Result<()> {
     match content {
         InjectContent::Text(text) => {
             clipboard.set_text(text)?;
+        }
+        InjectContent::Html(html) => {
+            set_html(html)?;
+        }
+        InjectContent::Rtf(rtf) => {
+            set_rtf(rtf)?;
         }
         InjectContent::Image(bytes) => {
             use image::load_from_memory;
@@ -38,4 +45,16 @@ fn trigger_paste() {
     enigo.key_down(Key::Control);
     enigo.key_click(Key::Layout('v'));
     enigo.key_up(Key::Control);
+}
+
+fn set_html(html: String) -> Result<()> {
+    let ctx = ClipboardContext::new().map_err(|e| anyhow!(e.to_string()))?;
+    ctx.set_html(html).map_err(|e| anyhow!(e.to_string()))?;
+    Ok(())
+}
+
+fn set_rtf(rtf: String) -> Result<()> {
+    let ctx = ClipboardContext::new().map_err(|e| anyhow!(e.to_string()))?;
+    ctx.set_rich_text(rtf).map_err(|e| anyhow!(e.to_string()))?;
+    Ok(())
 }

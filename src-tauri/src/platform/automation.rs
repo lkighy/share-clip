@@ -3,6 +3,8 @@ use anyhow::Result;
 
 pub enum InjectContent {
     Text(String),
+    Html(String),
+    Rtf(String),
     Image(Vec<u8>),
     Files(Vec<PathBuf>),
 }

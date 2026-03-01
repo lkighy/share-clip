@@ -4,6 +4,8 @@ mod entity;
 mod platform;
 mod error;
 mod models;
+mod services;
+mod utils;
 
 use app::config::load_or_create_config;
 use app::shortcuts::global::init_register_shortcut;
@@ -12,6 +14,7 @@ use app::ui::window::init_app;
 use app::commands::clipboard;
 use db::{init_db, DbState};
 use tauri::Manager;
+use crate::services::clipboard_watcher::start_clipboard_watcher;
 // use crate::app::shortcuts::global::init_hide_register_shortcut_event;
 // use crate::app::shortcuts::global::ShortcutState;
 
@@ -19,6 +22,7 @@ use tauri::Manager;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(tauri_plugin_clipboard_x::init())
         // .manage(ShortcutState {
         //     auto_hide: AtomicBool::new(false),
         //     listener_added: AtomicBool::new(false),
@@ -34,10 +38,18 @@ pub fn run() {
             init_register_shortcut(app);
             // init_hide_register_shortcut_event(app);
             init_menu(app);
+
+            let app_handle = app.handle().clone();
+
+            // TODO: 初始化剪切板监听
+            let shutdown = start_clipboard_watcher(app_handle);
+            app.manage(shutdown);
+
             Ok(())
         })
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
+            clipboard::clipboard_record_list,
             clipboard::paste,
         ])
         .run(tauri::generate_context!())
