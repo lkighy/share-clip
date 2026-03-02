@@ -11,6 +11,7 @@ export interface ClipboardResponseModel {
     accessCount: number
     isFavorite: boolean
     isShared: boolean
+    isValid: boolean
 }
 
 export enum ClipboardType {

@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+﻿use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io;
 use std::path::PathBuf;
@@ -13,9 +13,16 @@ pub struct AppConfig {
     pub clipboard_window_width: i32,
     pub clipboard_window_height: i32,
     pub clipboard_window_spacing: i32,
+    // 是否自动清理失效数据
+    pub auto_cleanup_invalid_clipboard_data: bool,
+    // 缓存目录
     pub cache_dir: String,
-    pub image_cache_threshold_bytes: u64,
+    // 远程数据缓存目录
     pub remote_cache_dir: String,
+    /// 如果为 Some(days)，则自动清理超过 days 天的条目
+    pub cleanup_after_days: Option<u64>,
+    /// 如果为 Some(n)，则最多保留 n 条记录（None 表示无限制）
+    pub max_items: Option<usize>,
 }
 
 impl Default for AppConfig {
@@ -25,16 +32,18 @@ impl Default for AppConfig {
             clipboard_window_width: 420,
             clipboard_window_height: 640,
             clipboard_window_spacing: 10,
+            auto_cleanup_invalid_clipboard_data: true,
             cache_dir: default_cache_dir(),
-            image_cache_threshold_bytes: 512 * 1024,
             remote_cache_dir: "remote".to_string(),
+            cleanup_after_days: None,
+            max_items: None,
         }
     }
 }
 
 fn default_cache_dir() -> String {
     if cfg!(target_os = "windows") {
-        // Windows 使用系统临时目录，例如 C:\Users\<用户名>\AppData\Local\Temp\<应用标识>
+        // Windows uses system temp path, e.g. C:\Users\<user>\AppData\Local\Temp\<app-id>
         std::env::temp_dir()
             .join(APP_IDENTIFIER)
             .to_string_lossy()
@@ -47,7 +56,7 @@ fn default_cache_dir() -> String {
             .to_string_lossy()
             .into_owned()
     } else {
-        // Linux 遵循 XDG 规范
+        // Linux follows XDG spec
         std::env::var_os("XDG_CACHE_HOME")
             .map(PathBuf::from)
             .or_else(|| std::env::var_os("HOME").map(PathBuf::from).map(|home| home.join(".cache")))

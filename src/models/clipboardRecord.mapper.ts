@@ -16,6 +16,7 @@ export function mapClipboardRecord(dto: ClipboardResponse): ClipboardResponseMod
             : undefined,
         accessCount: dto.access_count,
         isFavorite: dto.is_favorite === 1,
-        isShared: dto.is_shared === 1
+        isShared: dto.is_shared === 1,
+        isValid: dto.is_valid === 1,
     }
 }

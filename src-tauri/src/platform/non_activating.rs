@@ -22,15 +22,22 @@
 // TODO: 存在致命Bug， 在chrome浏览器中如果选中文本时，唤出剪切板会导致chrome卡死
 #[cfg(target_os = "windows")]
 pub mod windows {
-    use std::sync::{Mutex, OnceLock};
-    use tauri::{AppHandle, Manager, Window};
-    use winapi::shared::windef::{HWND, RECT, HHOOK};
-    use winapi::um::winuser::{CallNextHookEx, GetWindowLongPtrW, GetWindowRect, SetWindowLongPtrW, SetWindowsHookExW, ShowWindow, UnhookWindowsHookEx, GWL_EXSTYLE, MSLLHOOKSTRUCT, SW_HIDE, SW_SHOWNA, WH_MOUSE_LL, WM_LBUTTONDOWN, WM_MBUTTONDOWN, WM_RBUTTONDOWN, WM_XBUTTONDOWN, WS_EX_NOACTIVATE};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::OnceLock;
+    use std::thread;
+    use std::time::Duration;
+    use tauri::{AppHandle, Emitter, Manager, Window};
+    use winapi::shared::windef::{HWND, POINT, RECT};
+    use winapi::um::winuser::{
+        GetAsyncKeyState, GetCursorPos, GetWindowLongPtrW, GetWindowRect, SetWindowLongPtrW,
+        IsWindowVisible, ShowWindow, GWL_EXSTYLE, SW_HIDE, SW_SHOWNA, VK_LBUTTON, VK_MBUTTON,
+        VK_RBUTTON, VK_XBUTTON1, VK_XBUTTON2, WS_EX_NOACTIVATE,
+    };
 
     static APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
-    static HOOK: Mutex<Option<usize>> = Mutex::new(None);
+    static WATCHER_STARTED: AtomicBool = AtomicBool::new(false);
 
-    /// 初始化无焦点窗口并安装全局鼠标钩子
+    /// 初始化无焦点窗口并启动自动隐藏检测（轮询，不使用全局低级鼠标钩子）
     pub fn init_non_activating_window(window: &Window) {
         let hwnd = window.hwnd().unwrap().0 as HWND;
         unsafe {
@@ -40,7 +47,7 @@ pub mod windows {
 
         let app_handle = window.app_handle().clone();
         let _ = APP_HANDLE.set(app_handle);
-        install_mouse_hook();
+        start_auto_hide_watcher();
     }
 
     /// 以不激活的方式显示窗口
@@ -49,75 +56,77 @@ pub mod windows {
         unsafe {
             ShowWindow(hwnd, SW_SHOWNA);
         }
+
+        let _ = window.emit("clipboard-window-invoked", ());
     }
 
-    /// 隐藏窗口事件
-    pub fn hide_window_force(window: &Window) {
-        let hwnd = window.hwnd().unwrap().0 as HWND;
-        unsafe {
-            ShowWindow(hwnd, SW_HIDE);
+    fn start_auto_hide_watcher() {
+        if WATCHER_STARTED.swap(true, Ordering::AcqRel) {
+            return;
         }
-    }
 
-    fn install_mouse_hook() {
-        unsafe {
-            let hook = SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_proc), std::ptr::null_mut(), 0);
-            let mut guard = HOOK.lock().unwrap();
-            if !hook.is_null() {
-                *guard = Some(hook as usize);
-            } else {
-                eprintln!("[Tauri] 安装全局鼠标钩子失败");
-            }
-        }
-    }
+        thread::spawn(|| {
+            let mut hide_latched = false;
 
-    unsafe extern "system" fn mouse_proc(n_code: i32, w_param: usize, l_param: isize) -> isize {
-        if n_code >= 0 {
-            match w_param as u32 {
-                WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN | WM_XBUTTONDOWN => {
-                    let msll = &*(l_param as *const MSLLHOOKSTRUCT);
-                    let pt = msll.pt;
+            loop {
+                thread::sleep(Duration::from_millis(25));
 
-                    let hwnd = if let Some(app_handle) = APP_HANDLE.get() {
-                        if let Some(window) = app_handle.get_window("index") {
-                            window.hwnd().unwrap().0 as HWND
-                        } else {
-                            return CallNextHookEx(std::ptr::null_mut(), n_code, w_param, l_param);
+                let down = is_any_mouse_button_down();
+                let Some(app_handle) = APP_HANDLE.get() else {
+                    hide_latched = false;
+                    continue;
+                };
+
+                let Some(window) = app_handle.get_window("index") else {
+                    hide_latched = false;
+                    continue;
+                };
+
+                let hwnd = window.hwnd().unwrap().0 as HWND;
+                if unsafe { IsWindowVisible(hwnd) } == 0 {
+                    hide_latched = false;
+                    continue;
+                }
+
+                if down && !hide_latched {
+                    if !is_cursor_inside_window(hwnd) {
+                        unsafe {
+                            ShowWindow(hwnd, SW_HIDE);
                         }
-                    } else {
-                        return CallNextHookEx(std::ptr::null_mut(), n_code, w_param, l_param);
-                    };
-
-                    let mut rect: RECT = std::mem::zeroed();
-                    GetWindowRect(hwnd, &mut rect);
-                    let inside = pt.x >= rect.left && pt.x <= rect.right
-                        && pt.y >= rect.top && pt.y <= rect.bottom;
-
-                    if !inside {
-                        if let Some(app_handle) = APP_HANDLE.get() {
-                            let app_handle_clone = app_handle.clone();
-                            let _ = app_handle.run_on_main_thread(move || {
-                                // TODO: 应该添加一个字段存储对应窗口的枚举用于定制
-                                if let Some(window) = app_handle_clone.get_window("index") {
-                                    hide_window_force(&window);
-                                }
-                            });
-                        }
+                        hide_latched = true;
                     }
                 }
-                _ => {}
+
+                if !down {
+                    hide_latched = false;
+                }
             }
-        }
-        CallNextHookEx(std::ptr::null_mut(), n_code, w_param, l_param)
+        });
     }
 
-    /// 卸载鼠标钩子（可选）
-    pub fn uninstall_mouse_hook() {
+    fn is_any_mouse_button_down() -> bool {
         unsafe {
-            let mut guard = HOOK.lock().unwrap();
-            if let Some(hook) = guard.take() {
-                UnhookWindowsHookEx(hook as HHOOK);
+            (GetAsyncKeyState(VK_LBUTTON) as u16 & 0x8000) != 0
+                || (GetAsyncKeyState(VK_RBUTTON) as u16 & 0x8000) != 0
+                || (GetAsyncKeyState(VK_MBUTTON) as u16 & 0x8000) != 0
+                || (GetAsyncKeyState(VK_XBUTTON1) as u16 & 0x8000) != 0
+                || (GetAsyncKeyState(VK_XBUTTON2) as u16 & 0x8000) != 0
+        }
+    }
+
+    fn is_cursor_inside_window(hwnd: HWND) -> bool {
+        unsafe {
+            let mut pt: POINT = std::mem::zeroed();
+            if GetCursorPos(&mut pt) == 0 {
+                return false;
             }
+
+            let mut rect: RECT = std::mem::zeroed();
+            if GetWindowRect(hwnd, &mut rect) == 0 {
+                return false;
+            }
+
+            pt.x >= rect.left && pt.x <= rect.right && pt.y >= rect.top && pt.y <= rect.bottom
         }
     }
 }

@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use tauri::Manager;
+use crate::app::config::AppConfig;
 use crate::db;
 use crate::db::DbState;
 use crate::entity::clipboard_record;
@@ -8,7 +9,7 @@ use crate::models::clipboard::{ClipboardResponse, ClipboardType};
 use crate::platform::automation::{Automation, InjectContent};
 
 
-// TODO: 查询列表
+// 查询列表
 #[tauri::command]
 pub async fn clipboard_record_list(app: tauri::AppHandle, page: u64, page_size: u64) -> Result<Vec<ClipboardResponse>, ApiError> {
     let db = app.state::<DbState>();
@@ -17,66 +18,84 @@ pub async fn clipboard_record_list(app: tauri::AppHandle, page: u64, page_size: 
     Ok(records)
 }
 
-// TODO: 查询剪切板数据的接口
+/// 查询剪切板数据的接口
 #[tauri::command]
 pub async fn paste(app: tauri::AppHandle, id: i32) -> Result<(), ApiError> {
-    // TODO: 查询数据
     let db = app.state::<DbState>();
-    let record = db::service::clipboard::find_clipboard_record(&db, id).await.map_err(AppError::from)?;
+    let config = app.state::<AppConfig>();
+    let record = db::service::clipboard::get_and_validate_clipboard_record(&db, id, config.auto_cleanup_invalid_clipboard_data).await.map_err(AppError::from)?;
 
     let record = if let Some(record) = record {
         record
     } else {
-        // TODO: 描述数据不存在
-        return Ok(())
+        return Err(AppError::NotFound.into())
     };
 
     let mut auto = Automation::new();
 
     match record.r#type {
         t if t == ClipboardType::Text as i32 => {
-            let data = String::from_utf8(record.data.unwrap_or_default()).expect("UTF8");
+            let data = String::from_utf8(record.data.unwrap_or_default()).map_err(AppError::from)?;
             auto.inject(
                 InjectContent::Text(data)
-            ).expect("inject");
+            ).map_err(AppError::from)?;
         }
         t if t == ClipboardType::Html as i32 => {
-            let data = String::from_utf8(record.data.unwrap_or_default()).expect("UTF8");
+            let data = String::from_utf8(record.data.unwrap_or_default()).map_err(AppError::from)?;
             auto.inject(
                 InjectContent::Html(data)
-            ).expect("inject");
+            ).map_err(AppError::from)?;
         }
         t if t == ClipboardType::Rtf as i32 => {
-            let data = String::from_utf8(record.data.unwrap_or_default()).expect("UTF8");
+            let data = String::from_utf8(record.data.unwrap_or_default()).map_err(AppError::from)?;
             auto.inject(
                 InjectContent::Rtf(data)
-            ).expect("inject");
+            ).map_err(AppError::from)?;
         }
         t if t == ClipboardType::Image as i32 => {
-            let data = String::from_utf8(record.data.unwrap_or_default()).expect("UTF8");
+            let data = String::from_utf8(record.data.unwrap_or_default()).map_err(AppError::from)?;
             auto.inject(
                 InjectContent::Files(vec![PathBuf::from(data)])
-            ).expect("inject");
+            ).map_err(AppError::from)?;
         }
         t if t == ClipboardType::File as i32 || t == ClipboardType::Folder as i32 => {
-            let data = String::from_utf8(record.data.unwrap_or_default()).expect("UTF8");
-            let files: Vec<String> = serde_json::from_str(&data).expect("JSON");
+            let data = String::from_utf8(record.data.unwrap_or_default()).map_err(AppError::from)?;
+            let files: Vec<String> = serde_json::from_str(&data).map_err(AppError::from)?;
 
             auto.inject(
                 InjectContent::Files(files.into_iter().map(PathBuf::from).collect())
-            ).expect("inject");
-            // TODO: 再执行成功后应该更新的数据有：
+            ).map_err(AppError::from)?;
         }
         _ => {}
     }
 
-    // auto.inject(
-    //     InjectContent::Files(vec![
-    //         PathBuf::from("D:\\Documents\\code\\share-clip\\src-tauri\\Cargo.toml")
-    //     ])
-    // ).expect("发生错误 .env");
+    Ok(())
+}
+
+// TODO: 复制
+#[tauri::command]
+pub async fn copy_item(app: tauri::AppHandle, id: i32) -> Result<(), ApiError> {
 
     Ok(())
 }
 
-// TODO: 测试对图片和文件的支持
+// TODO: 收藏
+#[tauri::command]
+pub async fn toggle_favorite(app: tauri::AppHandle, id: i32) -> Result<(), ApiError> {
+
+    Ok(())
+}
+
+// TODO: 分享和取消分享
+#[tauri::command]
+pub async fn toggle_share(app: tauri::AppHandle, id: i32) -> Result<(), ApiError> {
+
+    Ok(())
+}
+
+// TODO: 删除
+#[tauri::command]
+pub async fn delete_item(app: tauri::AppHandle, id: i32) -> Result<(), ApiError> {
+
+    Ok(())
+}

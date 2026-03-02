@@ -46,4 +46,5 @@ pub struct ClipboardResponse {
     pub access_count: i32,
     pub is_favorite: i32,
     pub is_shared: i32,
+    pub is_valid: i32,
 }

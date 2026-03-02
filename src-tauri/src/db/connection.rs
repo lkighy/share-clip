@@ -1,5 +1,6 @@
 use sea_orm::{ConnectOptions, Database, DatabaseConnection, DbErr};
 use std::time::Duration;
+use migration::{Migrator, MigratorTrait};
 
 pub struct DbState {
     pub conn: DatabaseConnection,
@@ -12,5 +13,9 @@ pub async fn init_db() -> Result<DatabaseConnection, DbErr> {
         .min_connections(1)
         .connect_timeout(Duration::from_secs(8));
 
-    Database::connect(options).await
+    let db = Database::connect(options).await?;
+
+    Migrator::up(&db, None).await?;
+
+    Ok(db)
 }

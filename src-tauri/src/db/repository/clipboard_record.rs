@@ -29,6 +29,7 @@ pub async fn list_latest(
         .column(Column::AccessCount)
         .column(Column::IsFavorite)
         .column(Column::IsShared)
+        .column(Column::IsValid)
         .into_model::<ClipboardResponse>()
         .all(conn)
         .await

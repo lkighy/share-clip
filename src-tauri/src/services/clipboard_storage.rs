@@ -173,7 +173,8 @@ pub async fn save_clipboard_item(
 }
 
 fn build_files_preview(files: &[String]) -> String {
-    let display_count = files.len().min(5);
+    let total = files.len();
+    let display_count = if total > 3 { 2 } else { total };
     let mut preview_parts = Vec::with_capacity(display_count);
 
     for path_str in files.iter().take(display_count) {
@@ -187,10 +188,10 @@ fn build_files_preview(files: &[String]) -> String {
             .to_string();
 
         if path.is_dir() {
-            preview_parts.push(format!("[Folder] {}", item_label));
+            preview_parts.push(format!("📁 {}", item_label));
         } else if path.is_file() {
             if let Ok(metadata) = std::fs::metadata(path) {
-                preview_parts.push(format!("{} ({})", item_label, format_file_size(metadata.len())));
+                preview_parts.push(format!("📄 {} ({})", item_label, format_file_size(metadata.len())));
             } else {
                 preview_parts.push(item_label);
             }
@@ -199,9 +200,9 @@ fn build_files_preview(files: &[String]) -> String {
         }
     }
 
-    let mut preview = preview_parts.join("; ");
-    if files.len() > display_count {
-        preview.push_str(&format!(" ... and {} more", files.len() - display_count));
+    let mut preview = preview_parts.join("\n");
+    if total > 3 {
+        preview.push_str(&format!("\n等 {} 个文件", total - 2));
     }
     preview
 }

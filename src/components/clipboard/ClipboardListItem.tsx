@@ -32,6 +32,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip';
+import {cn} from "@/lib/utils.ts";
 
 const formatSize = (bytes?: number): string => {
   if (!bytes || bytes === 0) return '';
@@ -92,6 +93,7 @@ export const ClipboardListItem: React.FC<ClipboardListItemProps> = ({
     accessCount,
     isFavorite,
     isShared,
+      isValid
   } = item;
 
   const TypeIcon = TypeIconMap[type] || FileText;
@@ -143,8 +145,12 @@ export const ClipboardListItem: React.FC<ClipboardListItemProps> = ({
   return (
       <TooltipProvider delayDuration={300}>
         <Card
-            className={`cursor-pointer transition-colors hover:bg-accent/5 ${className}`}
-            onClick={() => onClick?.(id)}
+            className={cn(
+                `cursor-pointer transition-colors hover:bg-accent/5`,
+                !isValid && 'opacity-60 bg-muted/20 cursor-not-allowed', // 失效样式
+                className
+            )}
+            onClick={() => isValid && onClick?.(id)}
         >
           <CardContent className="p-3">
             {/* 上下布局：上部信息区，下部预览区 */}
@@ -193,7 +199,7 @@ export const ClipboardListItem: React.FC<ClipboardListItemProps> = ({
 
                 {/* 右侧操作按钮 */}
                 <div className="flex items-center gap-1">
-                  {/* 收藏按钮 */}
+                  {/* 收藏按钮 - 即使失效也可切换收藏状态？根据业务决定，这里保留 */}
                   <Tooltip>
                     <TooltipTrigger asChild>
                       <Button
@@ -202,11 +208,9 @@ export const ClipboardListItem: React.FC<ClipboardListItemProps> = ({
                           className="h-6 w-6"
                           onClick={handleFavorite}
                           aria-label={isFavorite ? '取消收藏' : '收藏'}
+                          disabled={!isValid} // 可选：失效时禁用收藏
                       >
-                        <Star
-                            size={14}
-                            className={isFavorite ? 'fill-yellow-500 text-yellow-500' : ''}
-                        />
+                        <Star size={14} className={isFavorite ? 'fill-yellow-500 text-yellow-500' : ''} />
                       </Button>
                     </TooltipTrigger>
                     <TooltipContent>
@@ -214,7 +218,6 @@ export const ClipboardListItem: React.FC<ClipboardListItemProps> = ({
                     </TooltipContent>
                   </Tooltip>
 
-                  {/* 更多操作菜单 */}
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
                       <Button variant="ghost" size="icon" className="h-6 w-6">
@@ -222,17 +225,26 @@ export const ClipboardListItem: React.FC<ClipboardListItemProps> = ({
                       </Button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
-                      <DropdownMenuItem onClick={handleCopy}>
+                      <DropdownMenuItem
+                          onClick={handleCopy}
+                          disabled={!isValid} // 失效时禁用复制
+                          className={!isValid ? 'opacity-50 cursor-not-allowed' : ''}
+                      >
                         <Copy size={14} className="mr-2" />
                         复制内容
                       </DropdownMenuItem>
-                      <DropdownMenuItem onClick={handleShare}>
+                      <DropdownMenuItem
+                          onClick={handleShare}
+                          disabled={!isValid} // 失效时禁用分享
+                          className={!isValid ? 'opacity-50 cursor-not-allowed' : ''}
+                      >
                         <Share size={14} className="mr-2" />
                         {isShared ? '取消分享' : '分享'}
                       </DropdownMenuItem>
                       <DropdownMenuItem
                           onClick={handleDelete}
                           className="text-destructive focus:text-destructive"
+                          // 删除功能始终可用，以便清理无效数据
                       >
                         <Trash2 size={14} className="mr-2" />
                         删除
@@ -243,7 +255,12 @@ export const ClipboardListItem: React.FC<ClipboardListItemProps> = ({
               </div>
 
               {/* 下部：预览内容 */}
-              <div className="rounded-md bg-muted/30 p-2 text-base text-foreground/90 overflow-hidden">
+              <div className="relative rounded-md bg-muted/30 p-2 text-base text-foreground/90 overflow-hidden">
+                {!isValid && (
+                    <div className="absolute inset-0 flex items-center justify-center bg-background/50 backdrop-blur-[1px] z-10">
+                      <span className="text-xs text-muted-foreground bg-background/80 px-2 py-0.5 rounded">已失效</span>
+                    </div>
+                )}
                 {renderPreview()}
               </div>
             </div>

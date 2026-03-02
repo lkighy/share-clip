@@ -23,6 +23,12 @@ pub enum AppError {
 
     #[error("Internal error")]
     Internal(#[from] anyhow::Error),
+
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+
+    #[error("Serialization error: {0}")]
+    Json(#[from] serde_json::Error),
 }
 
 //
@@ -66,6 +72,20 @@ impl From<AppError> for ApiError {
                 code: "INTERNAL_ERROR",
                 message: e.to_string(),
             },
+            AppError::Io(e) => ApiError {
+                code: "IO_ERROR",
+                message: e.to_string(),
+            },
+            AppError::Json(e) => ApiError {
+                code: "SERIALIZATION_ERROR",
+                message: e.to_string(),
+            }
         }
+    }
+}
+
+impl From<std::string::FromUtf8Error> for AppError {
+    fn from(err: std::string::FromUtf8Error) -> Self {
+        AppError::InvalidInput(format!("无效的 UTF-8 数据: {}", err))
     }
 }

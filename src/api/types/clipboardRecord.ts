@@ -15,6 +15,7 @@ export interface ClipboardResponse {
   access_count: number;
   is_favorite: number;
   is_shared: number;
+  is_valid: number,
 }
 
 export const TypeIconMap: Record<ClipboardType, React.ElementType> = {

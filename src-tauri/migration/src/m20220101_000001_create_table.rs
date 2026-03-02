@@ -46,6 +46,8 @@ impl MigrationTrait for Migration {
                     .col(ColumnDef::new(ClipboardRecord::IsFavorite).integer().not_null().default(0))
                     // 是否共享
                     .col(ColumnDef::new(ClipboardRecord::IsShared).integer().not_null().default(0))
+                    // 是否有效
+                    .col(ColumnDef::new(ClipboardRecord::IsValid).integer().not_null().default(1))
                     .to_owned(),
             )
             .await?;
@@ -116,4 +118,6 @@ enum ClipboardRecord {
     IsFavorite,
     // 是否分享
     IsShared,
+    // 是否有效
+    IsValid,
 }
