@@ -63,7 +63,11 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             clipboard::clipboard_record_list,
-            clipboard::paste,
+            clipboard::paste_clipboard_record,
+            clipboard::copy_clipboard_record,
+            clipboard::toggle_favorite,
+            clipboard::toggle_share,
+            clipboard::delete_clipboard_record,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -3,7 +3,7 @@
 
 use crate::db::DbState;
 use crate::entity::clipboard_record::{Model, ActiveModel, Entity};
-use sea_orm::{ActiveModelTrait, DbErr, EntityTrait, ModelTrait, Set};
+use sea_orm::{ActiveModelTrait, DatabaseConnection, DbErr, EntityTrait, ModelTrait, Set};
 use crate::db::repository::clipboard_record;
 use crate::entity::prelude::ClipboardRecord;
 use crate::error::AppError;
@@ -103,14 +103,70 @@ async fn handle_invalid_entry(
     }
     Ok(None)
 }
-// pub async fn update_record(
-//     db: &DbState,
-//     id: &str,
-//     patch: UpdateClipboardRecordInput,
-// ) -> Result<Option<Model>, DbErr> {
-//     clipboard_record::update_by_id(&db.conn, id, patch).await
-// }
-//
-// pub async fn delete_record(db: &DbState, id: &str) -> Result<u64, DbErr> {
-//     clipboard_record::delete_by_id(&db.conn, id).await
-// }
+
+/// 切换条目的收藏状态，返回新的收藏状态
+pub async fn toggle_favorite(
+    db: &DbState,
+    id: i32,
+) -> Result<bool, AppError> {
+    // 1. 查找条目
+    let record = Entity::find_by_id(id)
+        .one(&db.conn)
+        .await?
+        .ok_or(AppError::NotFound)?;
+
+    // 2. 计算新状态（取反）
+    let new_favorite = if record.is_favorite == 1 { 0 } else { 1 };
+
+    // 3. 更新数据库
+    let mut active: crate::entity::clipboard_record::ActiveModel = record.into();
+    active.is_favorite = Set(new_favorite);
+    active.update(&db.conn).await?;
+
+    // 4. 返回新状态（true/false 方便前端使用）
+    Ok(new_favorite == 1)
+}
+
+/// 切换条目的分享状态，返回新的分享状态
+pub async fn toggle_share(
+    db: &DbState,
+    id: i32,
+) -> Result<bool, AppError> {
+    let record = Entity::find_by_id(id)
+        .one(&db.conn)
+        .await?
+        .ok_or(AppError::NotFound)?;
+
+    let new_share = if record.is_shared == 1 { 0 } else { 1 };
+
+    let mut active: ActiveModel = record.into();
+    active.is_shared = Set(new_share);
+    active.update(&db.conn).await?;
+
+    Ok(new_share == 1)
+}
+
+/// 删除指定 ID 的条目
+pub async fn delete_item(db: &DbState, id: i32, cache_dir: &str) -> Result<(), AppError> {
+    // 先查询记录（获取 data 字段）
+    let record = Entity::find_by_id(id)
+        .one(&db.conn)
+        .await?
+        .ok_or(AppError::NotFound)?;
+
+    // 如果是图片类型，尝试删除缓存文件（假设缓存文件以 hash 命名）
+    if record.r#type == ClipboardType::Image as i32 {
+        if let Some(data) = record.data.clone() {
+            // 假设 data 存储的是文件路径
+            let path_str = String::from_utf8(data).unwrap_or_default();
+            let path = std::path::Path::new(&path_str);
+            if path.exists() && path.starts_with(cache_dir) {
+                let _ = std::fs::remove_file(path); // 忽略错误，可能文件已被删
+            }
+        }
+    }
+
+    // 最后删除数据库记录
+    record.delete(&db.conn).await?;
+    Ok(())
+}

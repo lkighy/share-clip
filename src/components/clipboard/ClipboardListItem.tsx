@@ -218,6 +218,24 @@ export const ClipboardListItem: React.FC<ClipboardListItemProps> = ({
                     </TooltipContent>
                   </Tooltip>
 
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-6 w-6"
+                          onClick={handleShare}
+                          aria-label={isShared ? '取消分享' : '分享'}
+                          disabled={!isValid} // 可选：失效时禁用收藏
+                      >
+                        <Share size={14} className={isShared ? 'fill-yellow-500 text-yellow-500' : ''} />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p>{isShared ? '取消分享' : '分享'}</p>
+                    </TooltipContent>
+                  </Tooltip>
+
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
                       <Button variant="ghost" size="icon" className="h-6 w-6">
@@ -233,14 +251,14 @@ export const ClipboardListItem: React.FC<ClipboardListItemProps> = ({
                         <Copy size={14} className="mr-2" />
                         复制内容
                       </DropdownMenuItem>
-                      <DropdownMenuItem
-                          onClick={handleShare}
-                          disabled={!isValid} // 失效时禁用分享
-                          className={!isValid ? 'opacity-50 cursor-not-allowed' : ''}
-                      >
-                        <Share size={14} className="mr-2" />
-                        {isShared ? '取消分享' : '分享'}
-                      </DropdownMenuItem>
+                      {/*<DropdownMenuItem*/}
+                      {/*    onClick={handleShare}*/}
+                      {/*    disabled={!isValid} // 失效时禁用分享*/}
+                      {/*    className={!isValid ? 'opacity-50 cursor-not-allowed' : ''}*/}
+                      {/*>*/}
+                      {/*  <Share size={14} className="mr-2" />*/}
+                      {/*  {isShared ? '取消分享' : '分享'}*/}
+                      {/*</DropdownMenuItem>*/}
                       <DropdownMenuItem
                           onClick={handleDelete}
                           className="text-destructive focus:text-destructive"

@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use html2text::from_read;
 use tauri::Manager;
 use crate::app::config::AppConfig;
 use crate::db;
@@ -20,7 +21,7 @@ pub async fn clipboard_record_list(app: tauri::AppHandle, page: u64, page_size: 
 
 /// 查询剪切板数据的接口
 #[tauri::command]
-pub async fn paste(app: tauri::AppHandle, id: i32) -> Result<(), ApiError> {
+pub async fn paste_clipboard_record(app: tauri::AppHandle, id: i32) -> Result<(), ApiError> {
     let db = app.state::<DbState>();
     let config = app.state::<AppConfig>();
     let record = db::service::clipboard::get_and_validate_clipboard_record(&db, id, config.auto_cleanup_invalid_clipboard_data).await.map_err(AppError::from)?;
@@ -72,30 +73,83 @@ pub async fn paste(app: tauri::AppHandle, id: i32) -> Result<(), ApiError> {
     Ok(())
 }
 
-// TODO: 复制
+/// 复制
 #[tauri::command]
-pub async fn copy_item(app: tauri::AppHandle, id: i32) -> Result<(), ApiError> {
+pub async fn copy_clipboard_record(app: tauri::AppHandle, id: i32) -> Result<(), ApiError> {
+    let db = app.state::<DbState>();
+    let config = app.state::<AppConfig>();
+    let record = db::service::clipboard::get_and_validate_clipboard_record(&db, id, config.auto_cleanup_invalid_clipboard_data).await.map_err(AppError::from)?;
+
+    let record: clipboard_record::Model = if let Some(record) = record {
+        record
+    } else {
+        return Err(AppError::NotFound.into())
+    };
+
+    match record.r#type {
+        t if t == ClipboardType::Text as i32 => {
+            let data = String::from_utf8(record.data.unwrap_or_default()).map_err(AppError::from)?;
+            tauri_plugin_clipboard_x::write_text(data)
+                .await
+                .map_err(|e| AppError::InvalidInput(e.to_string()))?;
+        }
+        t if t == ClipboardType::Html as i32 => {
+            let html = String::from_utf8(record.data.unwrap_or_default()).map_err(AppError::from)?;
+            let text = from_read(html.as_bytes(), usize::MAX);
+            tauri_plugin_clipboard_x::write_html(text, html)
+                .await
+                .map_err(|e| AppError::InvalidInput(e.to_string()))?;
+        }
+        t if t == ClipboardType::Rtf as i32 => {
+            let rtf = String::from_utf8(record.data.unwrap_or_default()).map_err(AppError::from)?;
+            let text = record.preview.unwrap_or_default();
+            tauri_plugin_clipboard_x::write_rtf(text, rtf)
+                .await
+                .map_err(|e| AppError::InvalidInput(e.to_string()))?;
+        }
+        t if t == ClipboardType::Image as i32 => {
+            let path = String::from_utf8(record.data.unwrap_or_default()).map_err(AppError::from)?;
+            tauri_plugin_clipboard_x::write_image(path)
+                .await
+                .map_err(|e| AppError::InvalidInput(e.to_string()))?;
+        }
+        t if t == ClipboardType::File as i32 || t == ClipboardType::Folder as i32 => {
+            let data = String::from_utf8(record.data.unwrap_or_default()).map_err(AppError::from)?;
+            let files: Vec<String> = serde_json::from_str(&data).map_err(AppError::from)?;
+            tauri_plugin_clipboard_x::write_files(files)
+                .await
+                .map_err(|e| AppError::InvalidInput(e.to_string()))?;
+        }
+        _ => {}
+    }
 
     Ok(())
 }
 
-// TODO: 收藏
+/// 收藏
 #[tauri::command]
-pub async fn toggle_favorite(app: tauri::AppHandle, id: i32) -> Result<(), ApiError> {
+pub async fn toggle_favorite(app: tauri::AppHandle, id: i32) -> Result<bool, ApiError> {
+    let db = app.state::<DbState>();
 
-    Ok(())
+    let data = db::service::clipboard::toggle_favorite(&db, id).await.map_err(AppError::from)?;
+    Ok(data)
 }
 
-// TODO: 分享和取消分享
+/// 分享和取消分享
 #[tauri::command]
-pub async fn toggle_share(app: tauri::AppHandle, id: i32) -> Result<(), ApiError> {
+pub async fn toggle_share(app: tauri::AppHandle, id: i32) -> Result<bool, ApiError> {
+    let db = app.state::<DbState>();
 
-    Ok(())
+    let data = db::service::clipboard::toggle_share(&db, id).await.map_err(AppError::from)?;
+    Ok(data)
 }
 
-// TODO: 删除
+/// 删除
 #[tauri::command]
-pub async fn delete_item(app: tauri::AppHandle, id: i32) -> Result<(), ApiError> {
+pub async fn delete_clipboard_record(app: tauri::AppHandle, id: i32) -> Result<(), ApiError> {
+    let db = app.state::<DbState>();
+    let config = app.state::<AppConfig>();
 
+    db::service::clipboard::delete_item(&db, id, &config.cache_dir).await.map_err(AppError::from)?;
     Ok(())
 }

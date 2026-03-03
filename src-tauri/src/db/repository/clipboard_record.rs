@@ -4,6 +4,7 @@ use crate::entity::clipboard_record::{self, Column, Entity, Model};
 use sea_orm::prelude::DateTimeUtc;
 use sea_orm::{ActiveModelTrait, ActiveValue::NotSet, ActiveValue::Set, ColumnTrait, DatabaseConnection, DbConn, DbErr, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
 use crate::entity::prelude::ClipboardRecord;
+use crate::error::AppError;
 use crate::models::clipboard::ClipboardResponse;
 // 假设事件枚举已包含以下变体
 
