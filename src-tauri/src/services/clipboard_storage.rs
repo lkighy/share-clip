@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use html2text::from_read;
+use log::info;
 use regex::Regex;
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 use tauri::Manager;
@@ -135,7 +136,7 @@ pub async fn save_clipboard_item(
             }
         }
         ClipboardChangeEvent::Unknown { formats } => {
-            println!("skip unknown clipboard format(s): {:?}", formats);
+            info!("skip unknown clipboard format(s): {:?}", formats);
             return Ok(());
         }
     };

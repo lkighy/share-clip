@@ -2,10 +2,12 @@ use clipboard_rs::{
     Clipboard, ClipboardContext, ClipboardHandler, ClipboardWatcher, ClipboardWatcherContext,
     ContentFormat,
 };
+use log::{error, info};
 use std::path::Path;
 use std::sync::mpsc::{self, Sender};
 use std::thread;
 use tauri::AppHandle;
+
 use crate::services::clipboard_storage::save_clipboard_item;
 use crate::utils::format::normalize_file_uri;
 
@@ -55,10 +57,10 @@ fn is_image_path(path: &str) -> bool {
 
 impl ClipboardHandler for AppClipboardHandler {
     fn on_clipboard_change(&mut self) {
-        println!("[Watcher] clipboard changed.");
+        info!("[Watcher] clipboard changed.");
 
         if let Ok(ctx) = ClipboardContext::new() {
-            // 分类优先级：Files -> Image -> Html -> Rtf -> Text
+            // Priority: Files -> Image -> Html -> Rtf -> Text.
             if ctx.has(ContentFormat::Files) {
                 let files = ctx.get_files().unwrap_or_default();
                 let mut file_count = 0usize;
@@ -127,61 +129,19 @@ pub fn start_clipboard_watcher(app_handle: AppHandle) -> clipboard_rs::WatcherSh
     let shutdown = watcher.add_handler(handler).get_shutdown_channel();
 
     thread::spawn(move || {
-        println!("[Watcher] clipboard watcher started.");
+        info!("[Watcher] clipboard watcher started.");
         watcher.start_watch();
-        println!("[Watcher] clipboard watcher stopped.");
+        info!("[Watcher] clipboard watcher stopped.");
     });
 
-    // thread::spawn(move || {
-    //     let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
-    //     for event in rx {
-    //         match event {
-    //             ClipboardChangeEvent::Text(content) => {
-    //                 println!("[Main] text len={}", content.len());
-    //                 let app = app_handle.clone();
-    //                 let _ = app.run_on_main_thread(move || {
-    //                     println!("[Main] save text clipboard item...");
-    //                 });
-    //             }
-    //             ClipboardChangeEvent::Html(content) => {
-    //                 println!("[Main] html len={}", content.len());
-    //             }
-    //             ClipboardChangeEvent::Rtf(content) => {
-    //                 println!("[Main] rtf len={}", content.len());
-    //             }
-    //             ClipboardChangeEvent::Image => {
-    //                 println!("[Main] image clipboard content");
-    //             }
-    //             ClipboardChangeEvent::Files {
-    //                 files,
-    //                 file_count,
-    //                 folder_count,
-    //                 image_count,
-    //             } => {
-    //                 println!(
-    //                     "[Main] files total={}, files={}, folders={}, images={}",
-    //                     files.len(),
-    //                     file_count,
-    //                     folder_count,
-    //                     image_count
-    //                 );
-    //             }
-    //             ClipboardChangeEvent::Unknown { formats } => {
-    //                 println!("[Main] unknown clipboard format(s): {:?}", formats);
-    //             }
-    //         }
-    //     }
-    // });
-
     std::thread::spawn(move || {
-        // let rt = Runtime::new().expect("Failed to create tokio runtime");
         let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
 
         for event in rx {
             let app_handle = app_handle.clone();
             rt.spawn(async move {
                 if let Err(e) = save_clipboard_item(app_handle, event).await {
-                    eprintln!("保存剪贴板项失败: {}", e);
+                    error!("save_clipboard_item failed: {e}");
                 }
             });
         }

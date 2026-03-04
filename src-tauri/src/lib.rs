@@ -1,47 +1,43 @@
 mod app;
 mod db;
 mod entity;
-mod platform;
 mod error;
 mod models;
+mod platform;
 mod services;
 mod utils;
 
+use app::commands::clipboard;
 use app::config::load_or_create_config;
 use app::shortcuts::global::init_register_shortcut;
 use app::ui::tray::init_menu;
 use app::ui::window::init_app;
-use app::commands::clipboard;
 use db::{init_db, DbState};
+use log::{error, info};
 use tauri::Manager;
+
 use crate::db::service::cleanup::{cleanup_invalid_items, cleanup_old_items};
 use crate::services::clipboard_watcher::start_clipboard_watcher;
-// use crate::app::shortcuts::global::init_hide_register_shortcut_event;
-// use crate::app::shortcuts::global::ShortcutState;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_log::Builder::new().build())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_clipboard_x::init())
-        // .manage(ShortcutState {
-        //     auto_hide: AtomicBool::new(false),
-        //     listener_added: AtomicBool::new(false),
-        // })
         .setup(|app| {
             let config = load_or_create_config();
             let db = tauri::async_runtime::block_on(init_db())
                 .map_err(|err| format!("failed to initialize sqlite database: {err}"))?;
 
-            // 在后台执行清理，不阻塞启动
             let config_clone = config.clone();
             let db_clone = db.clone();
             tauri::async_runtime::spawn(async move {
                 if let Err(e) = cleanup_old_items(&db_clone, &config_clone).await {
-                    eprintln!("启动清理失败: {}", e);
+                    error!("cleanup_old_items failed: {e}");
                 }
                 if let Err(e) = cleanup_invalid_items(&db_clone, &config_clone).await {
-                    eprintln!("清理失效数据失败: {}", e);
+                    error!("cleanup_invalid_items failed: {e}");
                 }
             });
 
@@ -49,15 +45,13 @@ pub fn run() {
             app.manage(DbState { conn: db });
             init_app(app);
             init_register_shortcut(app);
-            // init_hide_register_shortcut_event(app);
             init_menu(app);
 
             let app_handle = app.handle().clone();
-
-            // 初始化剪切板监听
             let shutdown = start_clipboard_watcher(app_handle);
             app.manage(shutdown);
 
+            info!("share-clip started");
             Ok(())
         })
         .plugin(tauri_plugin_opener::init())
