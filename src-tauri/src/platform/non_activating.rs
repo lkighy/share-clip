@@ -19,7 +19,6 @@
 //     }
 // }
 
-// TODO: 存在致命Bug， 在chrome浏览器中如果选中文本时，唤出剪切板会导致chrome卡死
 #[cfg(target_os = "windows")]
 pub mod windows {
     use std::sync::atomic::{AtomicBool, Ordering};

@@ -32,7 +32,7 @@ pub async fn list_records(
     clipboard_record::list_latest(&db.conn, page_size, offset).await
 }
 
-// TODO: 获取数据
+// 获取数据
 pub async fn get_and_validate_clipboard_record(
     db: &DbState,
     id: i32,

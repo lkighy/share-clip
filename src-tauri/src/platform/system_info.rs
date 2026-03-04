@@ -13,8 +13,8 @@ pub mod caret {
             SafeArrayUnaccessData,
         },
         UI::Accessibility::{
-            CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationTextPattern,
-            IUIAutomationTextPattern2, IUIAutomationTextRange, UIA_TextPattern2Id, UIA_TextPatternId,
+            CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationTextPattern2,
+            IUIAutomationTextRange, UIA_TextPattern2Id,
         },
         UI::WindowsAndMessaging::{
             GetCursorPos, GetGUIThreadInfo, GetWindowRect, GUITHREADINFO,
@@ -142,15 +142,8 @@ pub mod caret {
             }
         }
 
-        if let Ok(pattern) = element.GetCurrentPattern(UIA_TextPatternId) {
-            if let Ok(text_pattern) = pattern.cast::<IUIAutomationTextPattern>() {
-                if let Ok(ranges) = text_pattern.GetVisibleRanges() {
-                    if let Ok(range) = ranges.GetElement(0) {
-                        return get_range_bounding_rect(&range);
-                    }
-                }
-            }
-        }
+        // `GetVisibleRanges` may hang in Chromium-based apps when selection/click state churns quickly.
+        // Skip this fallback to keep caret lookup non-blocking and rely on element/cursor fallbacks instead.
 
         None
     }
