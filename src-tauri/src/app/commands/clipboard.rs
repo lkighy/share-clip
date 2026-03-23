@@ -1,19 +1,22 @@
-use std::path::PathBuf;
-use html2text::from_read;
-use log::{error, info};
-use tauri::Manager;
-use crate::app::config::AppConfig;
+use crate::app::config::AppConfigStore;
 use crate::db;
 use crate::db::DbState;
 use crate::entity::clipboard_record;
 use crate::error::{ApiError, AppError};
 use crate::models::clipboard::{ClipboardResponse, ClipboardType};
 use crate::platform::automation::{Automation, InjectContent};
-
+use html2text::from_read;
+use log::{error, info};
+use std::path::PathBuf;
+use tauri::Manager;
 
 // 查询列表
 #[tauri::command]
-pub async fn clipboard_record_list(app: tauri::AppHandle, page: u64, page_size: u64) -> Result<Vec<ClipboardResponse>, ApiError> {
+pub async fn clipboard_record_list(
+    app: tauri::AppHandle,
+    page: u64,
+    page_size: u64,
+) -> Result<Vec<ClipboardResponse>, ApiError> {
     let db = app.state::<DbState>();
 
     let records = db::service::clipboard::list_records(&db, page, page_size)
@@ -29,19 +32,23 @@ pub async fn clipboard_record_list(app: tauri::AppHandle, page: u64, page_size: 
 #[tauri::command]
 pub async fn paste_clipboard_record(app: tauri::AppHandle, id: i32) -> Result<(), ApiError> {
     let db = app.state::<DbState>();
-    let config = app.state::<AppConfig>();
-    let record = db::service::clipboard::get_and_validate_clipboard_record(&db, id, config.auto_cleanup_invalid_clipboard_data)
-        .await
-        .map_err(|e| {
-            error!("paste_clipboard_record query failed: id={id}, error={e}");
-            AppError::from(e)
-        })?;
+    let config = app.state::<AppConfigStore>().get();
+    let record = db::service::clipboard::get_and_validate_clipboard_record(
+        &db,
+        id,
+        config.auto_cleanup_invalid_clipboard_data,
+    )
+    .await
+    .map_err(|e| {
+        error!("paste_clipboard_record query failed: id={id}, error={e}");
+        AppError::from(e)
+    })?;
 
     let record = if let Some(record) = record {
         record
     } else {
         error!("paste_clipboard_record not found: id={id}");
-        return Err(AppError::NotFound.into())
+        return Err(AppError::NotFound.into());
     };
 
     let mut auto = Automation::new();
@@ -52,9 +59,7 @@ pub async fn paste_clipboard_record(app: tauri::AppHandle, id: i32) -> Result<()
                 error!("paste_clipboard_record utf8 decode failed: id={id}, type=text, error={e}");
                 AppError::from(e)
             })?;
-            auto.inject(
-                InjectContent::Text(data)
-            ).map_err(|e| {
+            auto.inject(InjectContent::Text(data)).map_err(|e| {
                 error!("paste_clipboard_record inject text failed: id={id}, error={e}");
                 AppError::from(e)
             })?;
@@ -64,9 +69,7 @@ pub async fn paste_clipboard_record(app: tauri::AppHandle, id: i32) -> Result<()
                 error!("paste_clipboard_record utf8 decode failed: id={id}, type=html, error={e}");
                 AppError::from(e)
             })?;
-            auto.inject(
-                InjectContent::Html(data)
-            ).map_err(|e| {
+            auto.inject(InjectContent::Html(data)).map_err(|e| {
                 error!("paste_clipboard_record inject html failed: id={id}, error={e}");
                 AppError::from(e)
             })?;
@@ -76,9 +79,7 @@ pub async fn paste_clipboard_record(app: tauri::AppHandle, id: i32) -> Result<()
                 error!("paste_clipboard_record utf8 decode failed: id={id}, type=rtf, error={e}");
                 AppError::from(e)
             })?;
-            auto.inject(
-                InjectContent::Rtf(data)
-            ).map_err(|e| {
+            auto.inject(InjectContent::Rtf(data)).map_err(|e| {
                 error!("paste_clipboard_record inject rtf failed: id={id}, error={e}");
                 AppError::from(e)
             })?;
@@ -88,12 +89,11 @@ pub async fn paste_clipboard_record(app: tauri::AppHandle, id: i32) -> Result<()
                 error!("paste_clipboard_record utf8 decode failed: id={id}, type=image, error={e}");
                 AppError::from(e)
             })?;
-            auto.inject(
-                InjectContent::Files(vec![PathBuf::from(data)])
-            ).map_err(|e| {
-                error!("paste_clipboard_record inject image-path failed: id={id}, error={e}");
-                AppError::from(e)
-            })?;
+            auto.inject(InjectContent::Files(vec![PathBuf::from(data)]))
+                .map_err(|e| {
+                    error!("paste_clipboard_record inject image-path failed: id={id}, error={e}");
+                    AppError::from(e)
+                })?;
         }
         t if t == ClipboardType::File as i32 || t == ClipboardType::Folder as i32 => {
             let data = String::from_utf8(record.data.unwrap_or_default()).map_err(|e| {
@@ -105,15 +105,19 @@ pub async fn paste_clipboard_record(app: tauri::AppHandle, id: i32) -> Result<()
                 AppError::from(e)
             })?;
 
-            auto.inject(
-                InjectContent::Files(files.into_iter().map(PathBuf::from).collect())
-            ).map_err(|e| {
+            auto.inject(InjectContent::Files(
+                files.into_iter().map(PathBuf::from).collect(),
+            ))
+            .map_err(|e| {
                 error!("paste_clipboard_record inject files failed: id={id}, error={e}");
                 AppError::from(e)
             })?;
         }
         _ => {}
     }
+
+    #[cfg(target_os = "windows")]
+    crate::platform::non_activating::windows::hide_window();
 
     Ok(())
 }
@@ -122,19 +126,23 @@ pub async fn paste_clipboard_record(app: tauri::AppHandle, id: i32) -> Result<()
 #[tauri::command]
 pub async fn copy_clipboard_record(app: tauri::AppHandle, id: i32) -> Result<(), ApiError> {
     let db = app.state::<DbState>();
-    let config = app.state::<AppConfig>();
-    let record = db::service::clipboard::get_and_validate_clipboard_record(&db, id, config.auto_cleanup_invalid_clipboard_data)
-        .await
-        .map_err(|e| {
-            error!("copy_clipboard_record query failed: id={id}, error={e}");
-            AppError::from(e)
-        })?;
+    let config = app.state::<AppConfigStore>().get();
+    let record = db::service::clipboard::get_and_validate_clipboard_record(
+        &db,
+        id,
+        config.auto_cleanup_invalid_clipboard_data,
+    )
+    .await
+    .map_err(|e| {
+        error!("copy_clipboard_record query failed: id={id}, error={e}");
+        AppError::from(e)
+    })?;
 
     let record: clipboard_record::Model = if let Some(record) = record {
         record
     } else {
         error!("copy_clipboard_record not found: id={id}");
-        return Err(AppError::NotFound.into())
+        return Err(AppError::NotFound.into());
     };
 
     match record.r#type {
@@ -215,10 +223,12 @@ pub async fn copy_clipboard_record(app: tauri::AppHandle, id: i32) -> Result<(),
 pub async fn toggle_favorite(app: tauri::AppHandle, id: i32) -> Result<bool, ApiError> {
     let db = app.state::<DbState>();
 
-    let data = db::service::clipboard::toggle_favorite(&db, id).await.map_err(|e| {
-        error!("toggle_favorite failed: id={id}, error={e}");
-        AppError::from(e)
-    })?;
+    let data = db::service::clipboard::toggle_favorite(&db, id)
+        .await
+        .map_err(|e| {
+            error!("toggle_favorite failed: id={id}, error={e}");
+            AppError::from(e)
+        })?;
     Ok(data)
 }
 
@@ -227,10 +237,12 @@ pub async fn toggle_favorite(app: tauri::AppHandle, id: i32) -> Result<bool, Api
 pub async fn toggle_share(app: tauri::AppHandle, id: i32) -> Result<bool, ApiError> {
     let db = app.state::<DbState>();
 
-    let data = db::service::clipboard::toggle_share(&db, id).await.map_err(|e| {
-        error!("toggle_share failed: id={id}, error={e}");
-        AppError::from(e)
-    })?;
+    let data = db::service::clipboard::toggle_share(&db, id)
+        .await
+        .map_err(|e| {
+            error!("toggle_share failed: id={id}, error={e}");
+            AppError::from(e)
+        })?;
     Ok(data)
 }
 
@@ -238,13 +250,16 @@ pub async fn toggle_share(app: tauri::AppHandle, id: i32) -> Result<bool, ApiErr
 #[tauri::command]
 pub async fn delete_clipboard_record(app: tauri::AppHandle, id: i32) -> Result<(), ApiError> {
     let db = app.state::<DbState>();
-    let config = app.state::<AppConfig>();
+    let config = app.state::<AppConfigStore>().get();
 
     match db::service::clipboard::delete_item(&db, id, &config.cache_dir).await {
         Ok(()) => Ok(()),
         Err(AppError::NotFound) => {
             // 业务正常情况，记录 info 或 debug
-            info!("delete_clipboard_record: item {} not found, maybe already deleted", id);
+            info!(
+                "delete_clipboard_record: item {} not found, maybe already deleted",
+                id
+            );
             Err(ApiError::from(AppError::NotFound))
         }
         Err(e) => {

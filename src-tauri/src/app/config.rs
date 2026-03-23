@@ -1,7 +1,9 @@
-﻿use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io;
 use std::path::PathBuf;
+
+use parking_lot::RwLock;
 
 const APP_IDENTIFIER: &str = "com.lkighy.share-clip";
 
@@ -23,6 +25,75 @@ pub struct AppConfig {
     pub cleanup_after_days: Option<u64>,
     /// 如果为 Some(n)，则最多保留 n 条记录（None 表示无限制）
     pub max_items: Option<usize>,
+    // 是否默认分享文本，默认为 true
+    pub default_share_text: bool,
+    // 是否默认分享复制的图片，默认为 false
+    pub default_share_image: bool,
+    // 是否默认分享文件，默认为 false
+    pub default_share_file: bool,
+    // 是否默认分享文件夹，默认为 false
+    pub default_share_folder: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AppConfigUpdate {
+    pub shortcut: Option<String>,
+    pub clipboard_window_width: Option<i32>,
+    pub clipboard_window_height: Option<i32>,
+    pub clipboard_window_spacing: Option<i32>,
+    pub auto_cleanup_invalid_clipboard_data: Option<bool>,
+    pub cache_dir: Option<String>,
+    pub remote_cache_dir: Option<String>,
+    pub cleanup_after_days: Option<Option<u64>>,
+    pub max_items: Option<Option<usize>>,
+    pub default_share_text: Option<bool>,
+    pub default_share_image: Option<bool>,
+    pub default_share_file: Option<bool>,
+    pub default_share_folder: Option<bool>,
+}
+
+impl AppConfigUpdate {
+    pub fn apply(self, config: &mut AppConfig) {
+        if let Some(value) = self.shortcut {
+            config.shortcut = value;
+        }
+        if let Some(value) = self.clipboard_window_width {
+            config.clipboard_window_width = value;
+        }
+        if let Some(value) = self.clipboard_window_height {
+            config.clipboard_window_height = value;
+        }
+        if let Some(value) = self.clipboard_window_spacing {
+            config.clipboard_window_spacing = value;
+        }
+        if let Some(value) = self.auto_cleanup_invalid_clipboard_data {
+            config.auto_cleanup_invalid_clipboard_data = value;
+        }
+        if let Some(value) = self.cache_dir {
+            config.cache_dir = value;
+        }
+        if let Some(value) = self.remote_cache_dir {
+            config.remote_cache_dir = value;
+        }
+        if let Some(value) = self.cleanup_after_days {
+            config.cleanup_after_days = value;
+        }
+        if let Some(value) = self.max_items {
+            config.max_items = value;
+        }
+        if let Some(value) = self.default_share_text {
+            config.default_share_text = value;
+        }
+        if let Some(value) = self.default_share_image {
+            config.default_share_image = value;
+        }
+        if let Some(value) = self.default_share_file {
+            config.default_share_file = value;
+        }
+        if let Some(value) = self.default_share_folder {
+            config.default_share_folder = value;
+        }
+    }
 }
 
 impl Default for AppConfig {
@@ -37,6 +108,10 @@ impl Default for AppConfig {
             remote_cache_dir: "remote".to_string(),
             cleanup_after_days: None,
             max_items: None,
+            default_share_text: true,
+            default_share_image: false,
+            default_share_file: false,
+            default_share_folder: false,
         }
     }
 }
@@ -59,7 +134,11 @@ fn default_cache_dir() -> String {
         // Linux follows XDG spec
         std::env::var_os("XDG_CACHE_HOME")
             .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(PathBuf::from).map(|home| home.join(".cache")))
+            .or_else(|| {
+                std::env::var_os("HOME")
+                    .map(PathBuf::from)
+                    .map(|home| home.join(".cache"))
+            })
             .map(|dir| dir.join(APP_IDENTIFIER))
             .unwrap_or_else(|| PathBuf::from("cache"))
             .to_string_lossy()
@@ -100,4 +179,33 @@ pub fn update_config_file(config: &AppConfig) -> io::Result<()> {
         .map_err(|err| io::Error::other(format!("serialize config failed: {err}")))?;
 
     fs::write(config_file_path(), content)
+}
+
+#[derive(Debug)]
+pub struct AppConfigStore {
+    inner: RwLock<AppConfig>,
+}
+
+impl AppConfigStore {
+    pub fn load() -> Self {
+        Self {
+            inner: RwLock::new(load_or_create_config()),
+        }
+    }
+
+    pub fn get(&self) -> AppConfig {
+        self.inner.read().clone()
+    }
+
+    pub fn update(&self, config: AppConfig) -> io::Result<AppConfig> {
+        update_config_file(&config)?;
+        *self.inner.write() = config.clone();
+        Ok(config)
+    }
+
+    pub fn update_with(&self, update: AppConfigUpdate) -> io::Result<AppConfig> {
+        let mut config = self.inner.read().clone();
+        update.apply(&mut config);
+        self.update(config)
+    }
 }

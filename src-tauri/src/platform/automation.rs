@@ -1,5 +1,5 @@
-use std::path::PathBuf;
 use anyhow::Result;
+use std::path::PathBuf;
 
 pub enum InjectContent {
     Text(String),
@@ -21,12 +21,12 @@ impl Automation {
     }
 }
 
-#[cfg(target_os = "windows")]
-mod windows;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(target_os = "windows")]
+mod windows;
 
 #[cfg(target_os = "windows")]
 pub use windows::*;

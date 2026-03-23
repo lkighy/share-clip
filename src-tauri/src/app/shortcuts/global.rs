@@ -1,12 +1,13 @@
-use crate::app::config::AppConfig;
-use crate::platform::system_info;
+use crate::app::config::AppConfigStore;
 #[cfg(target_os = "windows")]
 use crate::platform::non_activating::windows::show_window_non_activating;
-use tauri::{App, LogicalSize, Manager, Position};
+use crate::platform::system_info;
+use tauri::{AppHandle, LogicalSize, Manager, Position};
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
-pub fn init_register_shortcut(app: &App) {
-    let config = app.state::<AppConfig>();
+pub fn init_register_shortcut(app: &AppHandle) {
+    let config = app.state::<AppConfigStore>();
+    let config = config.get();
     let shortcut = config.shortcut.trim().to_string();
     let _ = app.global_shortcut().unregister(shortcut.as_str());
 
@@ -85,12 +86,8 @@ fn compute_best_window_position(
         cursor_bottom,
     };
 
-    let candidates: [fn(&LayoutContext) -> (i32, i32); 4] = [
-        position_bottom,
-        position_top,
-        position_left,
-        position_right,
-    ];
+    let candidates: [fn(&LayoutContext) -> (i32, i32); 4] =
+        [position_bottom, position_top, position_left, position_right];
 
     for (i, candidate) in candidates.iter().enumerate() {
         let (win_x, win_y) = candidate(&ctx);

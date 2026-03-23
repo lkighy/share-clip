@@ -1,10 +1,13 @@
 //! 格式处理
 
-use image::codecs::jpeg::JpegEncoder;
 use base64::Engine;
+use image::codecs::jpeg::JpegEncoder;
 
 // 辅助函数：生成图片缩略图并压缩至 ≤10KB
-pub fn generate_image_thumbnail(image_data: &[u8], max_size_kb: usize) -> Result<String, Box<dyn std::error::Error>> {
+pub fn generate_image_thumbnail(
+    image_data: &[u8],
+    max_size_kb: usize,
+) -> Result<String, Box<dyn std::error::Error>> {
     // 加载原始图片
     let img = image::load_from_memory(image_data)?;
 
@@ -35,7 +38,6 @@ pub fn generate_image_thumbnail(image_data: &[u8], max_size_kb: usize) -> Result
     // 将字节转换为 Base64 字符串
     Ok(base64::engine::general_purpose::STANDARD.encode(&thumbnail_bytes))
 }
-
 
 pub fn normalize_file_uri(path: &str) -> &str {
     if let Some(rest) = path.strip_prefix("file:///") {

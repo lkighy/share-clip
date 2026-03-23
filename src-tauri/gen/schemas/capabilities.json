@@ -1,0 +1,1 @@
+{"default":{"identifier":"default","description":"Capability for the main window","local":true,"windows":["main","index","shared-files","app-config"],"permissions":["core:default","opener:default","log:default","core:event:allow-listen","core:window:allow-start-dragging","dialog:allow-open"]}}

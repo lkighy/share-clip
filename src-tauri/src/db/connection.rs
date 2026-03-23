@@ -1,6 +1,6 @@
+use migration::{Migrator, MigratorTrait};
 use sea_orm::{ConnectOptions, Database, DatabaseConnection, DbErr};
 use std::time::Duration;
-use migration::{Migrator, MigratorTrait};
 
 pub struct DbState {
     pub conn: DatabaseConnection,

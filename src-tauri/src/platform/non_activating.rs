@@ -1,4 +1,3 @@
-﻿
 // /// Windows 平台实现
 // #[cfg(target_os = "windows")]
 // pub mod windows {
@@ -28,10 +27,12 @@ pub mod windows {
     use tauri::{AppHandle, Emitter, Manager, Window};
     use winapi::shared::windef::{HWND, POINT, RECT};
     use winapi::um::winuser::{
-        GetAsyncKeyState, GetCursorPos, GetWindowLongPtrW, GetWindowRect, SetWindowLongPtrW,
-        IsWindowVisible, ShowWindow, GWL_EXSTYLE, SW_HIDE, SW_SHOWNA, VK_LBUTTON, VK_MBUTTON,
+        GetAsyncKeyState, GetCursorPos, GetWindowLongPtrW, GetWindowRect, IsWindowVisible,
+        SetWindowLongPtrW, ShowWindow, GWL_EXSTYLE, SW_HIDE, SW_SHOWNA, VK_LBUTTON, VK_MBUTTON,
         VK_RBUTTON, VK_XBUTTON1, VK_XBUTTON2, WS_EX_NOACTIVATE,
     };
+
+    static HIDE_LATCHED: AtomicBool = AtomicBool::new(false);
 
     static APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
     static WATCHER_STARTED: AtomicBool = AtomicBool::new(false);
@@ -65,39 +66,44 @@ pub mod windows {
         }
 
         thread::spawn(|| {
-            let mut hide_latched = false;
+            // let mut hide_latched = false;
 
             loop {
                 thread::sleep(Duration::from_millis(25));
 
                 let down = is_any_mouse_button_down();
                 let Some(app_handle) = APP_HANDLE.get() else {
-                    hide_latched = false;
+                    // hide_latched = false;
+                    HIDE_LATCHED.store(false, Ordering::Relaxed);
                     continue;
                 };
 
                 let Some(window) = app_handle.get_window("index") else {
-                    hide_latched = false;
+                    // hide_latched = false;
+                    HIDE_LATCHED.store(false, Ordering::Relaxed);
                     continue;
                 };
 
                 let hwnd = window.hwnd().unwrap().0 as HWND;
                 if unsafe { IsWindowVisible(hwnd) } == 0 {
-                    hide_latched = false;
+                    // hide_latched = false;
+                    HIDE_LATCHED.store(false, Ordering::Relaxed);
                     continue;
                 }
 
-                if down && !hide_latched {
+                if down && !HIDE_LATCHED.load(Ordering::Relaxed) {
                     if !is_cursor_inside_window(hwnd) {
                         unsafe {
                             ShowWindow(hwnd, SW_HIDE);
                         }
-                        hide_latched = true;
+                        // hide_latched = true;
+                        HIDE_LATCHED.store(true, Ordering::Relaxed);
                     }
                 }
 
                 if !down {
-                    hide_latched = false;
+                    // hide_latched = false;
+                    HIDE_LATCHED.store(false, Ordering::Relaxed);
                 }
             }
         });
@@ -128,14 +134,36 @@ pub mod windows {
             pt.x >= rect.left && pt.x <= rect.right && pt.y >= rect.top && pt.y <= rect.bottom
         }
     }
-}
 
+    // 隐藏窗口，这个应该是个通用通用隐藏函数
+    pub fn hide_window() {
+        if let Some(app_handle) = APP_HANDLE.get() {
+            if let Some(window) = app_handle.get_window("index") {
+                // 隐藏窗口
+
+                let hwnd = window.hwnd().unwrap().0 as HWND;
+                if unsafe { IsWindowVisible(hwnd) } == 0 {
+                    // hide_latched = false;
+                    HIDE_LATCHED.store(false, Ordering::Relaxed);
+                    return;
+                }
+
+                unsafe {
+                    ShowWindow(hwnd, SW_HIDE);
+                }
+
+                // 重置隐藏锁存标志，防止轮询线程误判
+                HIDE_LATCHED.store(true, Ordering::Relaxed);
+            }
+        }
+    }
+}
 
 // MacOS 平台实现
 #[cfg(target_os = "macos")]
 mod macos {
-    use tauri::{Runtime, Window};
     use objc::{msg_send, runtime::Object, sel, sel_impl};
+    use tauri::{Runtime, Window};
 
     pub fn init_non_activating_panel<R: Runtime>(window: &Window<R>) {
         unsafe {

@@ -1,2 +1,3 @@
-pub mod clipboard;
 pub mod cleanup;
+pub mod clipboard;
+mod local_files;

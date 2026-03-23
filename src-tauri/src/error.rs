@@ -79,7 +79,7 @@ impl From<AppError> for ApiError {
             AppError::Json(e) => ApiError {
                 code: "SERIALIZATION_ERROR",
                 message: e.to_string(),
-            }
+            },
         }
     }
 }

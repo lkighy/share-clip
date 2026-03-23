@@ -1,9 +1,9 @@
-use std::path::PathBuf;
-use anyhow::{Result, anyhow};
-use enigo::{Enigo, Key, KeyboardControllable};
+use crate::platform::automation::InjectContent;
+use anyhow::{anyhow, Result};
 use arboard::Clipboard;
 use clipboard_rs::{Clipboard as _, ClipboardContext};
-use crate::platform::automation::InjectContent;
+use enigo::{Enigo, Key, KeyboardControllable};
+use std::path::PathBuf;
 
 pub fn inject(content: InjectContent) -> Result<()> {
     let mut clipboard = Clipboard::new()?;

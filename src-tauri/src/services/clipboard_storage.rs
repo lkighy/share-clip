@@ -9,7 +9,7 @@ use regex::Regex;
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 use tauri::Manager;
 
-use crate::app::config::AppConfig;
+use crate::app::config::AppConfigStore;
 use crate::db::DbState;
 use crate::entity::clipboard_record;
 use crate::models::clipboard::ClipboardType;
@@ -19,7 +19,6 @@ use crate::utils::image::format_file_size;
 
 type StorageResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
-
 // TODO: 将查询、更新等操作移动到 db 中
 #[allow(dead_code)]
 pub async fn save_clipboard_item(
@@ -27,13 +26,13 @@ pub async fn save_clipboard_item(
     event: ClipboardChangeEvent,
 ) -> StorageResult<()> {
     let db = &app_handle.state::<DbState>().conn;
-    let config = app_handle.state::<AppConfig>();
+    let config = app_handle.state::<AppConfigStore>().get();
 
     let (type_code, data, preview, hash, size) = match event {
         ClipboardChangeEvent::Text(content) => {
             let data_bytes = content.into_bytes();
-            let preview = preview_from_plain_text(&String::from_utf8_lossy(&data_bytes))
-                .unwrap_or_default();
+            let preview =
+                preview_from_plain_text(&String::from_utf8_lossy(&data_bytes)).unwrap_or_default();
             let size = data_bytes.len() as i64;
             let hash = hash_bytes(&data_bytes);
             (
@@ -46,7 +45,8 @@ pub async fn save_clipboard_item(
         }
         ClipboardChangeEvent::Html(content) => {
             let data_bytes = content.into_bytes();
-            let preview = preview_from_plain_text(&html_to_plain_text(&String::from_utf8_lossy(&data_bytes)));
+            let preview =
+                preview_from_plain_text(&html_to_plain_text(&String::from_utf8_lossy(&data_bytes)));
             let size = data_bytes.len() as i64;
             let hash = hash_bytes(&data_bytes);
             (
@@ -61,7 +61,8 @@ pub async fn save_clipboard_item(
             let data_bytes = content.into_bytes();
             let size = data_bytes.len() as i64;
             let hash = hash_bytes(&data_bytes);
-            let preview = preview_from_plain_text(&rtf_to_plain_text(&String::from_utf8_lossy(&data_bytes)));
+            let preview =
+                preview_from_plain_text(&rtf_to_plain_text(&String::from_utf8_lossy(&data_bytes)));
             (
                 i32::from(ClipboardType::Rtf),
                 Some(data_bytes),
@@ -140,6 +141,18 @@ pub async fn save_clipboard_item(
             return Ok(());
         }
     };
+    let default_is_shared = match type_code {
+        t if t == ClipboardType::Text as i32
+            || t == ClipboardType::Html as i32
+            || t == ClipboardType::Rtf as i32 =>
+        {
+            config.default_share_text
+        }
+        t if t == ClipboardType::Image as i32 => config.default_share_image,
+        t if t == ClipboardType::File as i32 => config.default_share_file,
+        t if t == ClipboardType::Folder as i32 => config.default_share_folder,
+        _ => false,
+    };
 
     let existing = clipboard_record::Entity::find()
         .filter(clipboard_record::Column::Hash.eq(hash.as_str()))
@@ -164,7 +177,7 @@ pub async fn save_clipboard_item(
             last_accessed_at: Set(now),
             access_count: Set(0),
             is_favorite: Set(0),
-            is_shared: Set(0),
+            is_shared: Set(if default_is_shared { 1 } else { 0 }),
             ..Default::default()
         };
         new_item.insert(db).await?;
@@ -192,7 +205,11 @@ fn build_files_preview(files: &[String]) -> String {
             preview_parts.push(format!("📁 {}", item_label));
         } else if path.is_file() {
             if let Ok(metadata) = std::fs::metadata(path) {
-                preview_parts.push(format!("📄 {} ({})", item_label, format_file_size(metadata.len())));
+                preview_parts.push(format!(
+                    "📄 {} ({})",
+                    item_label,
+                    format_file_size(metadata.len())
+                ));
             } else {
                 preview_parts.push(item_label);
             }
@@ -248,7 +265,6 @@ fn rtf_to_plain_text(rtf: &str) -> String {
     let text = ctrl_re.replace_all(&decoded, " ");
     braces_re.replace_all(&text, " ").into_owned()
 }
-
 
 fn hash_bytes(bytes: &[u8]) -> String {
     let mut hasher = DefaultHasher::new();

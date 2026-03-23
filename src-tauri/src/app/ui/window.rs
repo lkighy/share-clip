@@ -1,10 +1,15 @@
-use crate::app::config::AppConfig;
+use crate::app::config::AppConfigStore;
 #[cfg(target_os = "windows")]
 use crate::platform::non_activating::windows;
-use tauri::{App, LogicalSize, Manager};
+use tauri::{App, LogicalSize, Manager, WebviewUrl, WebviewWindow, WindowBuilder};
+use tauri::ipc::RuntimeCapability;
+use tauri::utils::config::WindowConfig;
+use tauri::utils::config_v1::WindowUrl;
+use crate::models::window::WindowLabel;
 
 pub fn init_app(app: &mut App) {
-    let config = app.state::<AppConfig>();
+    let config = app.state::<AppConfigStore>();
+    let config = config.get();
 
     if let Some(window) = app.get_window("index") {
         let _ = window.set_size(LogicalSize::new(
@@ -15,4 +20,31 @@ pub fn init_app(app: &mut App) {
         #[cfg(target_os = "windows")]
         windows::init_non_activating_window(&window);
     };
+}
+
+
+pub fn open_or_create_window(app: &tauri::AppHandle, label: WindowLabel) -> Result<(), String> {
+    if let Some(window) = app.get_window(label.label()) {
+        if let Ok(false) = window.is_visible() {
+            window.show().map_err(|e| e.to_string())?;
+        }
+        window.set_focus().map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    // let window = WindowBuilder::from_config(app, &config)
+    //     .map_err(|e| e.to_string())?
+    //     .build().map_err(|e| e.to_string())?;
+
+    // window.de
+    // window.op
+
+    WebviewWindow::builder(app, label.label(),  WebviewUrl::App(label.url_params().into()))
+        .title(label.title())
+        .inner_size(980.0, 700.0)
+        .skip_taskbar(true)
+        .decorations(false)
+        .build()
+        .map_err(|e| e.to_string())?;
+    Ok(())
 }

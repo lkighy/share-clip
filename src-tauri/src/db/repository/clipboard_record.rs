@@ -1,11 +1,14 @@
 #![allow(dead_code)]
 
 use crate::entity::clipboard_record::{self, Column, Entity, Model};
-use sea_orm::prelude::DateTimeUtc;
-use sea_orm::{ActiveModelTrait, ActiveValue::NotSet, ActiveValue::Set, ColumnTrait, DatabaseConnection, DbConn, DbErr, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
 use crate::entity::prelude::ClipboardRecord;
 use crate::error::AppError;
 use crate::models::clipboard::ClipboardResponse;
+use sea_orm::prelude::DateTimeUtc;
+use sea_orm::{
+    ActiveModelTrait, ActiveValue::NotSet, ActiveValue::Set, ColumnTrait, DatabaseConnection,
+    DbConn, DbErr, EntityTrait, QueryFilter, QueryOrder, QuerySelect,
+};
 // 假设事件枚举已包含以下变体
 
 // 获取列表
@@ -37,9 +40,6 @@ pub async fn list_latest(
 }
 
 // 查询单个数据
-pub async fn select_by_id(
-    conn: &DatabaseConnection,
-    id: i32,
-) -> Result<Option<Model>, DbErr> {
+pub async fn select_by_id(conn: &DatabaseConnection, id: i32) -> Result<Option<Model>, DbErr> {
     Entity::find_by_id(id).one(conn).await
 }

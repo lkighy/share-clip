@@ -110,7 +110,8 @@ pub async fn cleanup_invalid_items(
                 e
             })?;
             if paths.iter().any(|p| !std::path::Path::new(p).exists()) {
-                let auto_cleanup = item.is_favorite != 1 && config.auto_cleanup_invalid_clipboard_data;
+                let auto_cleanup =
+                    item.is_favorite != 1 && config.auto_cleanup_invalid_clipboard_data;
                 handle_invalid_item(db, item, auto_cleanup).await?;
             }
         }
@@ -134,7 +135,8 @@ pub async fn cleanup_invalid_items(
             })?;
             let path = std::path::Path::new(&path_str);
             if !path.exists() {
-                let auto_cleanup = item.is_favorite != 1 && config.auto_cleanup_invalid_clipboard_data;
+                let auto_cleanup =
+                    item.is_favorite != 1 && config.auto_cleanup_invalid_clipboard_data;
                 handle_invalid_item(db, item, auto_cleanup).await?;
             }
         }

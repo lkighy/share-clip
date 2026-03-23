@@ -1,13 +1,15 @@
-﻿#[cfg(target_os = "windows")]
+#[cfg(target_os = "windows")]
 pub mod caret {
     use std::thread;
     use std::time::Duration;
 
     use tauri::AppHandle;
-    use windows::core::{BOOL, Interface};
+    use windows::core::{Interface, BOOL};
     use windows::Win32::{
         Foundation::{HWND, POINT, RECT},
-        System::Com::{CoCreateInstance, CoInitializeEx, SAFEARRAY, CLSCTX_ALL, COINIT_MULTITHREADED},
+        System::Com::{
+            CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_MULTITHREADED, SAFEARRAY,
+        },
         System::Ole::{
             SafeArrayAccessData, SafeArrayGetDim, SafeArrayGetLBound, SafeArrayGetUBound,
             SafeArrayUnaccessData,
@@ -16,9 +18,7 @@ pub mod caret {
             CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationTextPattern2,
             IUIAutomationTextRange, UIA_TextPattern2Id,
         },
-        UI::WindowsAndMessaging::{
-            GetCursorPos, GetGUIThreadInfo, GetWindowRect, GUITHREADINFO,
-        },
+        UI::WindowsAndMessaging::{GetCursorPos, GetGUIThreadInfo, GetWindowRect, GUITHREADINFO},
     };
 
     pub fn get_ui_automation_pos() -> Option<(i32, i32, i32, i32)> {
@@ -133,7 +133,9 @@ pub mod caret {
         if let Ok(pattern) = element.GetCurrentPattern(UIA_TextPattern2Id) {
             if let Ok(text_pattern2) = pattern.cast::<IUIAutomationTextPattern2>() {
                 let mut is_active = BOOL(0);
-                let range = text_pattern2.GetCaretRange(&mut is_active as *mut BOOL).ok()?;
+                let range = text_pattern2
+                    .GetCaretRange(&mut is_active as *mut BOOL)
+                    .ok()?;
                 if is_active.as_bool() {
                     if let Some(rect) = get_range_bounding_rect(&range) {
                         return Some(rect);

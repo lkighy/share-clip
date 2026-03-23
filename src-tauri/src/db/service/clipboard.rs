@@ -158,7 +158,10 @@ pub async fn delete_item(db: &DbState, id: i32, cache_dir: &str) -> Result<(), A
             let path = std::path::Path::new(&path_str);
             if path.exists() && path.starts_with(cache_dir) {
                 if let Err(e) = std::fs::remove_file(path) {
-                    warn!("delete_item remove cache file failed: id={id}, path={}, error={e}", path.display());
+                    warn!(
+                        "delete_item remove cache file failed: id={id}, path={}, error={e}",
+                        path.display()
+                    );
                 }
             }
         }

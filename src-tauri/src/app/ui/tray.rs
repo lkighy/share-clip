@@ -1,18 +1,32 @@
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::TrayIconBuilder;
 use tauri::{App, Manager};
+use crate::app::ui::window::open_or_create_window;
+use crate::models::window::WindowLabel;
 
 pub fn init_menu(app: &App) {
-    let clipboard_item = MenuItemBuilder::with_id("index", "剪切板")
+    let clipboard_item = MenuItemBuilder::with_id("index", "剪贴板")
         .build(app)
-        .expect("创建列表 - 剪切板失败");
+        .expect("创建菜单项 - 剪贴板失败");
+    let shared_files_item = MenuItemBuilder::with_id("shared-files", "分享文件")
+        .build(app)
+        .expect("创建菜单项 - 分享文件失败");
+    let app_config_item = MenuItemBuilder::with_id("app-config", "设置")
+        .build(app)
+        .expect("创建菜单项 - 设置失败");
     let quit_item = MenuItemBuilder::with_id("quit", "退出")
         .build(app)
-        .expect("创建列表 - 退出失败");
+        .expect("创建菜单项 - 退出失败");
+
     let menu = MenuBuilder::new(app)
-        .items(&[&clipboard_item, &quit_item])
+        .items(&[
+            &clipboard_item,
+            &shared_files_item,
+            &app_config_item,
+            &quit_item,
+        ])
         .build()
-        .expect("构建菜单列表失败");
+        .expect("构建托盘菜单失败");
 
     TrayIconBuilder::new()
         .icon(app.default_window_icon().cloned().unwrap())
@@ -27,9 +41,37 @@ pub fn init_menu(app: &App) {
                     }
                 }
             }
+            // "shared-files" => {
+            //     if let Some(window) = app.get_window("shared-files") {
+            //         if let Ok(false) = window.is_visible() {
+            //             let _ = window.show();
+            //         }
+            //         let _ = window.set_focus();
+            //     }
+            // }
+            // "app-config" => {
+            //     if let Some(window) = app.get_window("app-config") {
+            //         if let Ok(false) = window.is_visible() {
+            //             let _ = window.show();
+            //         }
+            //         let _ = window.set_focus();
+            //     }
+            // }
+            "shared-files" => {
+                if let Err(e) = open_or_create_window(app, WindowLabel::ShareFile) {
+                    // TODO: 添加 log
+                    println!("{}", e);
+                }
+            },
+            "app-config"   => {
+                if let Err(e) = open_or_create_window(app, WindowLabel::Config) {
+                    // TODO: 添加 log
+                    println!("{}", e);
+                }
+            },
             "quit" => app.exit(0),
             _ => (),
         })
         .build(app)
-        .expect("初始化菜单列表失败");
+        .expect("初始化托盘菜单失败");
 }
