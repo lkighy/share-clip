@@ -55,6 +55,11 @@ regex = "1.11.1"
 log = "0.4"
 axum = "0.8.8"
 tauri-plugin-dialog = "2"
+blake3 = "1.8.2"
+notify = "8.2.0"
+tokio-util = { version = "0.7.17", features = ["io"] }
+walkdir = "2.5.0"
+if-addrs = "0.13.4"
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3.9", features = [

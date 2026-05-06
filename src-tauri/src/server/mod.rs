@@ -1,5 +1,6 @@
 mod routes;
 mod service;
+pub(crate) mod sync;
 
 use std::sync::Mutex;
 
@@ -18,7 +19,7 @@ impl ServerState {
         }
     }
 
-    pub fn start(&self, port: u16) -> Result<(), String> {
+    pub fn start(&self, bind_ip: &str, port: u16) -> Result<(), String> {
         let mut guard = self
             .controller
             .lock()
@@ -28,7 +29,7 @@ impl ServerState {
             return Err("server is already running".to_string());
         }
 
-        let controller = service::ServerController::start(port, self.db.clone())?;
+        let controller = service::ServerController::start(bind_ip, port, self.db.clone())?;
         *guard = Some(controller);
         Ok(())
     }

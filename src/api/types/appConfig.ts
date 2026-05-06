@@ -12,6 +12,9 @@ export type AppConfig = {
   default_share_image: boolean;
   default_share_file: boolean;
   default_share_folder: boolean;
+  enable_share_server: boolean;
+  share_server_bind_ip: string;
+  share_server_port: number;
 };
 
 export type AppConfigUpdate = Partial<AppConfig> & {

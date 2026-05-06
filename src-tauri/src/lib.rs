@@ -8,7 +8,7 @@ mod server;
 mod services;
 mod utils;
 
-use app::commands::{clipboard, config as config_commands, server as server_commands};
+use app::commands::{clipboard, config as config_commands, server as server_commands, share_files as share_files_commands};
 use app::config::AppConfigStore;
 use app::shortcuts::global::init_register_shortcut;
 use app::ui::tray::init_menu;
@@ -55,6 +55,13 @@ pub fn run() {
             let shutdown = start_clipboard_watcher(app_handle);
             app.manage(shutdown);
 
+            if config.enable_share_server {
+                let server_state = app.state::<server::ServerState>();
+                if let Err(e) = server_state.start(&config.share_server_bind_ip, config.share_server_port) {
+                    error!("start share server failed: {}", e);
+                }
+            }
+
             info!("share-clip started");
             Ok(())
         })
@@ -68,9 +75,18 @@ pub fn run() {
             clipboard::delete_clipboard_record,
             config_commands::get_app_config,
             config_commands::update_app_config,
+            config_commands::get_share_server_ip_options,
             server_commands::start_share_server,
             server_commands::stop_share_server,
             server_commands::share_server_status,
+            share_files_commands::list_remote_share_users,
+            share_files_commands::list_local_shared_files,
+            share_files_commands::upsert_remote_share_user,
+            share_files_commands::remove_remote_share_user,
+            share_files_commands::reveal_shared_clipboard_item,
+            share_files_commands::reveal_local_shared_file,
+            share_files_commands::unshare_local_shared_file,
+            share_files_commands::add_manual_shared_paths,
             window::operation_window,
         ])
         .run(tauri::generate_context!())

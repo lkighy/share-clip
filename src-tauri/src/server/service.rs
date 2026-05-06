@@ -10,9 +10,10 @@ pub struct ServerController {
 }
 
 impl ServerController {
-    pub fn start(port: u16, db: DatabaseConnection) -> Result<Self, String> {
+    pub fn start(bind_ip: &str, port: u16, db: DatabaseConnection) -> Result<Self, String> {
         let (stop_tx, stop_rx) = oneshot::channel();
         let (ready_tx, ready_rx) = mpsc::channel::<Result<(), String>>();
+        let bind_ip = bind_ip.to_string();
 
         let thread = thread::spawn(move || {
             let rt = match Runtime::new() {
@@ -24,7 +25,19 @@ impl ServerController {
             };
 
             rt.block_on(async move {
-                let addr = SocketAddr::from(([0, 0, 0, 0], port));
+                let addr: SocketAddr = match format!("{bind_ip}:{port}").parse() {
+                    Ok(addr) => addr,
+                    Err(e) => {
+                        let _ = ready_tx.send(Err(format!(
+                            "invalid bind address {bind_ip}:{port}: {e}"
+                        )));
+                        return;
+                    }
+                };
+                if addr.port() == 0 {
+                    let _ = ready_tx.send(Err("invalid port 0".to_string()));
+                    return;
+                }
                 let listener = match tokio::net::TcpListener::bind(addr).await {
                     Ok(listener) => listener,
                     Err(e) => {
@@ -33,7 +46,9 @@ impl ServerController {
                     }
                 };
 
+                let sync_db = db.clone();
                 let app = crate::server::routes::router(crate::server::routes::HttpState { db });
+                let sync_runtime = crate::server::sync::start(sync_db).await;
                 let _ = ready_tx.send(Ok(()));
 
                 if let Err(e) = axum::serve(listener, app)
@@ -44,6 +59,7 @@ impl ServerController {
                 {
                     log::error!("axum server exited with error: {e}");
                 }
+                sync_runtime.shutdown().await;
             });
         });
 

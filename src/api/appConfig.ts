@@ -8,3 +8,7 @@ export function getAppConfig() {
 export function updateAppConfig(payload: AppConfigUpdate) {
   return call<AppConfig>("update_app_config", { payload });
 }
+
+export function getShareServerIpOptions() {
+  return call<string[]>("get_share_server_ip_options");
+}

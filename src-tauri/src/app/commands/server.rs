@@ -1,15 +1,24 @@
 use serde::Serialize;
 use tauri::Manager;
 
+use crate::app::config::AppConfigStore;
+
 #[derive(Serialize)]
 pub struct ShareServerStatus {
     pub running: bool,
 }
 
 #[tauri::command]
-pub fn start_share_server(app: tauri::AppHandle, port: u16) -> Result<ShareServerStatus, String> {
+pub fn start_share_server(
+    app: tauri::AppHandle,
+    bind_ip: Option<String>,
+    port: Option<u16>,
+) -> Result<ShareServerStatus, String> {
+    let config = app.state::<AppConfigStore>().get();
     let state = app.state::<crate::server::ServerState>();
-    state.start(port)?;
+    let bind_ip = bind_ip.unwrap_or(config.share_server_bind_ip);
+    let port = port.unwrap_or(config.share_server_port);
+    state.start(&bind_ip, port)?;
     Ok(ShareServerStatus { running: true })
 }
 

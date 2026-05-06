@@ -33,6 +33,12 @@ pub struct AppConfig {
     pub default_share_file: bool,
     // 是否默认分享文件夹，默认为 false
     pub default_share_folder: bool,
+    // 是否启用共享服务器
+    pub enable_share_server: bool,
+    // 共享服务器绑定IP
+    pub share_server_bind_ip: String,
+    // 共享服务端口（文件列表/下载/diff）
+    pub share_server_port: u16,
 }
 
 #[derive(Debug, Deserialize)]
@@ -50,6 +56,9 @@ pub struct AppConfigUpdate {
     pub default_share_image: Option<bool>,
     pub default_share_file: Option<bool>,
     pub default_share_folder: Option<bool>,
+    pub enable_share_server: Option<bool>,
+    pub share_server_bind_ip: Option<String>,
+    pub share_server_port: Option<u16>,
 }
 
 impl AppConfigUpdate {
@@ -93,6 +102,15 @@ impl AppConfigUpdate {
         if let Some(value) = self.default_share_folder {
             config.default_share_folder = value;
         }
+        if let Some(value) = self.enable_share_server {
+            config.enable_share_server = value;
+        }
+        if let Some(value) = self.share_server_bind_ip {
+            config.share_server_bind_ip = value;
+        }
+        if let Some(value) = self.share_server_port {
+            config.share_server_port = value;
+        }
     }
 }
 
@@ -112,6 +130,9 @@ impl Default for AppConfig {
             default_share_image: false,
             default_share_file: false,
             default_share_folder: false,
+            enable_share_server: false,
+            share_server_bind_ip: "0.0.0.0".to_string(),
+            share_server_port: 24800,
         }
     }
 }
