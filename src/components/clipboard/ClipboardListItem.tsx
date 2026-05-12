@@ -14,6 +14,7 @@ import {
   Clock,
   HardDrive,
   Folder,
+  Files,
 } from 'lucide-react';
 
 import { ClipboardResponseModel, ClipboardType } from '@/models/clipboardRecord.ts';
@@ -44,6 +45,11 @@ const formatSize = (bytes?: number): string => {
     i++;
   }
   return `${size.toFixed(1)} ${units[i]}`;
+};
+
+const formatSizeLabel = (bytes?: number | null): string => {
+  const value = bytes ?? 0;
+  return value > 0 ? formatSize(value) : '文件夹';
 };
 
 const TypeIconMap: Record<ClipboardType, React.ElementType> = {
@@ -92,14 +98,63 @@ export const ClipboardListItem: React.FC<ClipboardListItemProps> = ({
     createdAt,
     accessCount,
     isFavorite,
-    isShared,
-      isValid
+      isShared,
+      isValid,
+      fileItems,
   } = item;
 
   const TypeIcon = TypeIconMap[type] || FileText;
   const typeName = TypeNameMap[type] || '未知';
 
   const renderPreview = () => {
+    if ((type === ClipboardType.File || type === ClipboardType.Folder) && fileItems?.length) {
+      const visibleItems = fileItems.slice(0, 4);
+      const hiddenCount = fileItems.length - visibleItems.length;
+      const totalBytes = fileItems.reduce((sum, file) => sum + (file.size ?? 0), 0);
+
+      return (
+        <div className="space-y-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant={type === ClipboardType.Folder ? 'secondary' : 'outline'} className="gap-1">
+              <Files size={12} />
+              {fileItems.length} 项
+            </Badge>
+            {totalBytes > 0 && (
+              <Badge variant="outline" className="gap-1">
+                <HardDrive size={12} />
+                {formatSize(totalBytes)}
+              </Badge>
+            )}
+            {isShared && <Badge className="bg-emerald-600 text-white hover:bg-emerald-600">已共享</Badge>}
+          </div>
+
+          <div className="space-y-1">
+            {visibleItems.map((file) => {
+              const Icon = file.isDir ? Folder : file.type === 2 ? ImageIcon : File;
+              return (
+                <div
+                  key={file.path}
+                  className={cn(
+                    'rounded-md border bg-background/70 px-2 py-1.5',
+                    !file.exists && 'opacity-60',
+                  )}
+                  title={file.path}
+                >
+                  <div className="flex min-w-0 items-center gap-2">
+                    <Icon size={14} className={file.isDir ? 'text-sky-500' : file.type === 2 ? 'text-violet-500' : 'text-muted-foreground'} />
+                    <span className="min-w-0 flex-1 truncate text-xs font-medium">{file.name}</span>
+                    <span className="shrink-0 text-[11px] text-muted-foreground">{file.exists ? formatSizeLabel(file.size) : '已失效'}</span>
+                  </div>
+                  <div className="mt-1 truncate pl-5 text-[11px] text-muted-foreground">{file.path}</div>
+                </div>
+              );
+            })}
+            {hiddenCount > 0 && <div className="text-[11px] text-muted-foreground">还有 {hiddenCount} 项未显示</div>}
+          </div>
+        </div>
+      );
+    }
+
     if (!preview) {
       return <span className="text-muted-foreground italic">无预览</span>;
     }
@@ -171,12 +226,17 @@ export const ClipboardListItem: React.FC<ClipboardListItemProps> = ({
                           {sourceApp}
                         </Badge>
                     )}
-                    {size && size > 0 && (
+                    {size && size > 0 && type !== ClipboardType.File && type !== ClipboardType.Folder && (
                         <div className="flex items-center">
                           <HardDrive size={12} className="mr-1" />
                           {formatSize(size)}
                         </div>
                     )}
+                    {(type === ClipboardType.File || type === ClipboardType.Folder) && fileItems?.length ? (
+                        <Badge variant="outline" className="text-xs">
+                          {fileItems.length} 项{isShared ? ' / 已共享' : ''}
+                        </Badge>
+                    ) : null}
                     <div className="flex items-center gap-1">
                       <Clock size={12} />
                       <Tooltip>

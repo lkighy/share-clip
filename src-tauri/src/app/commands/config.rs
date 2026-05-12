@@ -1,6 +1,6 @@
+use std::collections::BTreeSet;
 use tauri::Manager;
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
-use std::collections::BTreeSet;
 
 use crate::app::config::{AppConfig, AppConfigStore, AppConfigUpdate};
 use crate::app::shortcuts::global::init_register_shortcut;
@@ -45,6 +45,7 @@ pub fn update_app_config(
     } else if was_running {
         let _ = server_state.stop();
     }
+    crate::app::ui::tray::update_share_server_menu_label(&app);
 
     Ok(updated)
 }

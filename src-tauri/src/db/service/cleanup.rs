@@ -2,8 +2,8 @@ use log::debug;
 use sea_orm::*;
 
 use crate::app::config::AppConfig;
-use crate::db::DbState;
 use crate::db::service::clipboard::sync_local_files_on_clipboard_unshared_or_invalid;
+use crate::db::DbState;
 use crate::entity::clipboard_record;
 use crate::error::AppError;
 use crate::models::clipboard::ClipboardType;
@@ -72,11 +72,8 @@ async fn handle_invalid_item(
     auto_cleanup: bool,
 ) -> Result<(), DbErr> {
     let id = item.id;
-    let _ = sync_local_files_on_clipboard_unshared_or_invalid(
-        &DbState { conn: db.clone() },
-        &item,
-    )
-    .await;
+    let _ = sync_local_files_on_clipboard_unshared_or_invalid(&DbState { conn: db.clone() }, &item)
+        .await;
     if auto_cleanup {
         item.delete(db).await.map_err(|e| {
             debug!("handle_invalid_item delete failed: id={id}, auto_cleanup={auto_cleanup}, error={e}");

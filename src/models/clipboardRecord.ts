@@ -12,6 +12,16 @@ export interface ClipboardResponseModel {
     isFavorite: boolean
     isShared: boolean
     isValid: boolean
+    fileItems?: ClipboardFileItemModel[]
+}
+
+export interface ClipboardFileItemModel {
+    name: string
+    path: string
+    type: number
+    isDir: boolean
+    size?: number | null
+    exists: boolean
 }
 
 export enum ClipboardType {

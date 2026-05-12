@@ -18,5 +18,13 @@ export function mapClipboardRecord(dto: ClipboardResponse): ClipboardResponseMod
         isFavorite: dto.is_favorite === 1,
         isShared: dto.is_shared === 1,
         isValid: dto.is_valid === 1,
+        fileItems: dto.file_items?.map((item) => ({
+            name: item.name,
+            path: item.path,
+            type: item.type,
+            isDir: item.is_dir,
+            size: item.size,
+            exists: item.exists,
+        })),
     }
 }

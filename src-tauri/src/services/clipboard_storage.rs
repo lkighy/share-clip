@@ -8,10 +8,11 @@ use log::info;
 use regex::Regex;
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 use tauri::Manager;
+use uuid::Uuid;
 
 use crate::app::config::AppConfigStore;
 use crate::db::DbState;
-use crate::entity::clipboard_record;
+use crate::entity::{clipboard_record, local_files};
 use crate::models::clipboard::ClipboardType;
 use crate::services::clipboard_watcher::ClipboardChangeEvent;
 use crate::utils::format::{generate_image_thumbnail, normalize_file_uri};
@@ -89,52 +90,41 @@ pub async fn save_clipboard_item(
             files,
             file_count,
             folder_count,
-            image_count,
+            image_count: _,
         } => {
-            if files.len() == 1 && file_count == 1 && image_count == 1 {
-                let normalized = normalize_file_uri(&files[0]);
-                let image_data = std::fs::read(normalized)?;
-                let size = image_data.len() as i64;
-                let hash = hash_bytes(&image_data);
-                let preview = generate_image_thumbnail(&image_data, 10).ok();
-                let data = if Path::new(normalized).is_file() {
-                    normalized.as_bytes().to_vec()
-                } else {
-                    cache_image(&config.cache_dir, &hash, &image_data)?.into_bytes()
-                };
-                (
-                    i32::from(ClipboardType::Image),
-                    Some(data),
-                    preview,
-                    hash,
-                    size,
-                )
+            let normalized_files = files
+                .iter()
+                .map(|path| normalize_file_uri(path).to_string())
+                .collect::<Vec<_>>();
+            let preview = build_files_preview(&normalized_files);
+
+            let files_json = serde_json::to_string(&normalized_files)?;
+            let data_bytes = files_json.into_bytes();
+            let size = normalized_files
+                .iter()
+                .filter_map(|path| std::fs::metadata(path).ok())
+                .filter(|metadata| metadata.is_file())
+                .map(|metadata| metadata.len() as i64)
+                .sum::<i64>();
+
+            let mut sorted = normalized_files;
+            sorted.sort();
+            let hash_input = sorted.join("\0");
+            let hash = hash_bytes(hash_input.as_bytes());
+
+            let file_type = if folder_count > 0 && file_count == 0 {
+                ClipboardType::Folder
             } else {
-                let preview = build_files_preview(&files);
+                ClipboardType::File
+            };
 
-                let files_json = serde_json::to_string(&files)?;
-                let data_bytes = files_json.into_bytes();
-                let size = data_bytes.len() as i64;
-
-                let mut sorted = files;
-                sorted.sort();
-                let hash_input = sorted.join("\0");
-                let hash = hash_bytes(hash_input.as_bytes());
-
-                let file_type = if folder_count > 0 && file_count == 0 {
-                    ClipboardType::Folder
-                } else {
-                    ClipboardType::File
-                };
-
-                (
-                    i32::from(file_type),
-                    Some(data_bytes),
-                    Some(preview),
-                    hash,
-                    size,
-                )
-            }
+            (
+                i32::from(file_type),
+                Some(data_bytes),
+                Some(preview),
+                hash,
+                size,
+            )
         }
         ClipboardChangeEvent::Unknown { formats } => {
             info!("skip unknown clipboard format(s): {:?}", formats);
@@ -161,10 +151,15 @@ pub async fn save_clipboard_item(
 
     let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
 
-    if let Some(existing_model) = existing {
+    let saved_record = if let Some(existing_model) = existing {
+        let existing_id = existing_model.id;
         let mut active: clipboard_record::ActiveModel = existing_model.into();
         active.last_accessed_at = Set(now);
         active.update(db).await?;
+        clipboard_record::Entity::find_by_id(existing_id)
+            .one(db)
+            .await?
+            .ok_or("updated clipboard record not found")?
     } else {
         let new_item = clipboard_record::ActiveModel {
             r#type: Set(type_code),
@@ -180,10 +175,164 @@ pub async fn save_clipboard_item(
             is_shared: Set(if default_is_shared { 1 } else { 0 }),
             ..Default::default()
         };
-        new_item.insert(db).await?;
+        new_item.insert(db).await?
+    };
+
+    if config.unshare_on_clipboard_change {
+        unshare_previous_clipboard_temp_files(db, saved_record.id).await?;
+    }
+    if saved_record.is_shared == 1 {
+        upsert_temp_local_files_for_clipboard(db, &saved_record).await?;
+    }
+    crate::app::events::emit_clipboard_changed(
+        &app_handle,
+        vec![saved_record.id.to_string()],
+        "clipboard_saved",
+    );
+    crate::app::events::emit_local_files_changed(&app_handle, Vec::new(), "clipboard_changed");
+
+    Ok(())
+}
+
+async fn unshare_previous_clipboard_temp_files(
+    db: &sea_orm::DatabaseConnection,
+    current_clipboard_id: i32,
+) -> StorageResult<()> {
+    let rows = local_files::Entity::find()
+        .filter(local_files::Column::SourceType.eq(1))
+        .filter(local_files::Column::ShareMode.eq(1))
+        .filter(local_files::Column::IsValid.eq(1))
+        .all(db)
+        .await?;
+
+    for row in rows {
+        let mut ids = parse_source_clipboard_ids(row.source_clipboard_id.as_deref());
+        if ids.contains(&current_clipboard_id) {
+            continue;
+        }
+        if ids.is_empty() {
+            continue;
+        }
+        ids.retain(|id| *id == current_clipboard_id);
+
+        let mut am: local_files::ActiveModel = row.into();
+        if ids.is_empty() {
+            am.is_valid = Set(0);
+            am.source_clipboard_id = Set(None);
+        } else {
+            am.source_clipboard_id = Set(Some(serde_json::to_string(&ids)?));
+        }
+        am.updated_at = Set(Some(now_ts()));
+        am.update(db).await?;
     }
 
     Ok(())
+}
+
+async fn upsert_temp_local_files_for_clipboard(
+    db: &sea_orm::DatabaseConnection,
+    record: &clipboard_record::Model,
+) -> StorageResult<()> {
+    let paths = extract_share_paths(record)?;
+    for raw_path in paths {
+        let path = PathBuf::from(raw_path);
+        if !path.exists() {
+            continue;
+        }
+        let canonical = std::fs::canonicalize(&path).unwrap_or(path);
+        let path_text = canonical.to_string_lossy().to_string();
+        let metadata = std::fs::metadata(&canonical).ok();
+        let size = metadata.as_ref().and_then(|m| {
+            if m.is_file() {
+                Some(m.len() as i64)
+            } else {
+                None
+            }
+        });
+        let file_type = local_file_type_from_clipboard_type(record.r#type, &canonical);
+        let now = now_ts();
+
+        let existed = local_files::Entity::find()
+            .filter(local_files::Column::Path.eq(path_text.clone()))
+            .one(db)
+            .await?;
+
+        if let Some(existing) = existed {
+            let mut ids = parse_source_clipboard_ids(existing.source_clipboard_id.as_deref());
+            if !ids.contains(&record.id) {
+                ids.push(record.id);
+            }
+            let mut am: local_files::ActiveModel = existing.into();
+            am.is_valid = Set(1);
+            am.size = Set(size);
+            am.r#type = Set(file_type);
+            am.source_type = Set(1);
+            am.share_mode = Set(1);
+            am.source_clipboard_id = Set(Some(serde_json::to_string(&ids)?));
+            am.updated_at = Set(Some(now));
+            am.update(db).await?;
+        } else {
+            let am = local_files::ActiveModel {
+                id: Set(Uuid::new_v4().to_string()),
+                path: Set(path_text),
+                r#type: Set(file_type),
+                created_at: Set(now),
+                access_count: Set(0),
+                is_valid: Set(1),
+                size: Set(size),
+                source_clipboard_id: Set(Some(serde_json::to_string(&vec![record.id])?)),
+                source_type: Set(1),
+                is_favorite: Set(0),
+                share_mode: Set(1),
+                expires_at: Set(None),
+                updated_at: Set(Some(now)),
+            };
+            am.insert(db).await?;
+        }
+    }
+    Ok(())
+}
+
+fn extract_share_paths(record: &clipboard_record::Model) -> StorageResult<Vec<String>> {
+    if record.r#type == ClipboardType::File as i32 || record.r#type == ClipboardType::Folder as i32
+    {
+        let bytes = record.data.clone().unwrap_or_default();
+        let paths: Vec<String> = serde_json::from_slice(&bytes)?;
+        return Ok(paths
+            .into_iter()
+            .map(|p| normalize_file_uri(&p).to_string())
+            .collect());
+    }
+    if record.r#type == ClipboardType::Image as i32 {
+        let bytes = record.data.clone().unwrap_or_default();
+        let path = String::from_utf8(bytes)?;
+        return Ok(vec![normalize_file_uri(&path).to_string()]);
+    }
+    Ok(Vec::new())
+}
+
+fn local_file_type_from_clipboard_type(clipboard_type: i32, path: &Path) -> i32 {
+    if clipboard_type == ClipboardType::Folder as i32 || path.is_dir() {
+        return 1;
+    }
+    if clipboard_type == ClipboardType::Image as i32 {
+        return 2;
+    }
+    0
+}
+
+fn parse_source_clipboard_ids(raw: Option<&str>) -> Vec<i32> {
+    let Some(raw) = raw else {
+        return Vec::new();
+    };
+    serde_json::from_str::<Vec<i32>>(raw).unwrap_or_default()
+}
+
+fn now_ts() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|v| v.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 fn build_files_preview(files: &[String]) -> String {

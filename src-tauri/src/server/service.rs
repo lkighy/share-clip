@@ -28,9 +28,8 @@ impl ServerController {
                 let addr: SocketAddr = match format!("{bind_ip}:{port}").parse() {
                     Ok(addr) => addr,
                     Err(e) => {
-                        let _ = ready_tx.send(Err(format!(
-                            "invalid bind address {bind_ip}:{port}: {e}"
-                        )));
+                        let _ = ready_tx
+                            .send(Err(format!("invalid bind address {bind_ip}:{port}: {e}")));
                         return;
                     }
                 };

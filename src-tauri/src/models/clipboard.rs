@@ -1,4 +1,3 @@
-use sea_orm::FromQueryResult;
 use serde::Serialize;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,12 +33,23 @@ impl TryFrom<i32> for ClipboardType {
     }
 }
 
-#[derive(Debug, Clone, Serialize, FromQueryResult)]
+#[derive(Debug, Clone, Serialize)]
+pub struct ClipboardFileItem {
+    pub name: String,
+    pub path: String,
+    pub r#type: i32,
+    pub is_dir: bool,
+    pub size: Option<i64>,
+    pub exists: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct ClipboardResponse {
     pub id: i32,
     pub r#type: i32,
     pub preview: Option<String>,
-    pub size: Option<i32>,
+    pub hash: Option<String>,
+    pub size: Option<i64>,
     pub source_app: Option<String>,
     pub created_at: i64,
     pub last_accessed_at: i64,
@@ -47,4 +57,5 @@ pub struct ClipboardResponse {
     pub is_favorite: i32,
     pub is_shared: i32,
     pub is_valid: i32,
+    pub file_items: Option<Vec<ClipboardFileItem>>,
 }

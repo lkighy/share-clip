@@ -1,9 +1,26 @@
-use tauri::menu::{MenuBuilder, MenuItemBuilder};
-use tauri::tray::TrayIconBuilder;
-use tauri::{App, Manager};
 use crate::app::config::AppConfigStore;
 use crate::app::ui::window::open_or_create_window;
 use crate::models::window::WindowLabel;
+use tauri::menu::{MenuBuilder, MenuItem, MenuItemBuilder};
+use tauri::tray::TrayIconBuilder;
+use tauri::{App, AppHandle, Manager, Wry};
+
+pub struct TrayMenuState {
+    share_server_item: MenuItem<Wry>,
+}
+
+pub fn update_share_server_menu_label(app: &AppHandle) {
+    let Ok(state) = app.state::<crate::server::ServerState>().is_running() else {
+        return;
+    };
+    if let Some(menu_state) = app.try_state::<TrayMenuState>() {
+        let _ = menu_state.share_server_item.set_text(if state {
+            "关闭共享服务器"
+        } else {
+            "启动共享服务器"
+        });
+    }
+}
 
 pub fn init_menu(app: &App) {
     let clipboard_item = MenuItemBuilder::with_id("index", "剪贴板")
@@ -15,23 +32,34 @@ pub fn init_menu(app: &App) {
     let app_config_item = MenuItemBuilder::with_id("app-config", "设置")
         .build(app)
         .expect("创建菜单项 - 设置失败");
-    let start_share_server_item = MenuItemBuilder::with_id("start-share-server", "启动共享服务器")
-        .build(app)
-        .expect("创建菜单项 - 启动共享服务器失败");
-    let stop_share_server_item = MenuItemBuilder::with_id("stop-share-server", "关闭共享服务器")
-        .build(app)
-        .expect("创建菜单项 - 关闭共享服务器失败");
+    let share_server_running = app
+        .state::<crate::server::ServerState>()
+        .is_running()
+        .unwrap_or(false);
+    let share_server_item = MenuItemBuilder::with_id(
+        "toggle-share-server",
+        if share_server_running {
+            "关闭共享服务器"
+        } else {
+            "启动共享服务器"
+        },
+    )
+    .build(app)
+    .expect("创建菜单项 - 共享服务器失败");
     let quit_item = MenuItemBuilder::with_id("quit", "退出")
         .build(app)
         .expect("创建菜单项 - 退出失败");
+
+    app.manage(TrayMenuState {
+        share_server_item: share_server_item.clone(),
+    });
 
     let menu = MenuBuilder::new(app)
         .items(&[
             &clipboard_item,
             &shared_files_item,
             &app_config_item,
-            &start_share_server_item,
-            &stop_share_server_item,
+            &share_server_item,
             &quit_item,
         ])
         .build()
@@ -71,25 +99,32 @@ pub fn init_menu(app: &App) {
                     // TODO: 添加 log
                     println!("{}", e);
                 }
-            },
-            "app-config"   => {
+            }
+            "app-config" => {
                 if let Err(e) = open_or_create_window(app, WindowLabel::Config) {
                     // TODO: 添加 log
                     println!("{}", e);
                 }
-            },
-            "start-share-server" => {
-                let config = app.state::<AppConfigStore>().get();
-                let state = app.state::<crate::server::ServerState>();
-                if let Err(e) = state.start(&config.share_server_bind_ip, config.share_server_port) {
-                    println!("{}", e);
-                }
             }
-            "stop-share-server" => {
+            "toggle-share-server" => {
                 let state = app.state::<crate::server::ServerState>();
-                if let Err(e) = state.stop() {
-                    println!("{}", e);
+                match state.is_running() {
+                    Ok(true) => {
+                        if let Err(e) = state.stop() {
+                            println!("{}", e);
+                        }
+                    }
+                    Ok(false) => {
+                        let config = app.state::<AppConfigStore>().get();
+                        if let Err(e) =
+                            state.start(&config.share_server_bind_ip, config.share_server_port)
+                        {
+                            println!("{}", e);
+                        }
+                    }
+                    Err(e) => println!("{}", e),
                 }
+                update_share_server_menu_label(app);
             }
             "quit" => app.exit(0),
             _ => (),

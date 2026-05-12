@@ -19,6 +19,8 @@ pub fn start_share_server(
     let bind_ip = bind_ip.unwrap_or(config.share_server_bind_ip);
     let port = port.unwrap_or(config.share_server_port);
     state.start(&bind_ip, port)?;
+    crate::app::ui::tray::update_share_server_menu_label(&app);
+    crate::app::events::emit_server_status_changed(&app, "server_started");
     Ok(ShareServerStatus { running: true })
 }
 
@@ -26,6 +28,8 @@ pub fn start_share_server(
 pub fn stop_share_server(app: tauri::AppHandle) -> Result<ShareServerStatus, String> {
     let state = app.state::<crate::server::ServerState>();
     state.stop()?;
+    crate::app::ui::tray::update_share_server_menu_label(&app);
+    crate::app::events::emit_server_status_changed(&app, "server_stopped");
     Ok(ShareServerStatus { running: false })
 }
 

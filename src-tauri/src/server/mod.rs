@@ -1,5 +1,6 @@
 mod routes;
 mod service;
+mod share;
 pub(crate) mod sync;
 
 use std::sync::Mutex;

@@ -16,6 +16,16 @@ export interface ClipboardResponse {
   is_favorite: number;
   is_shared: number;
   is_valid: number,
+  file_items?: ClipboardFileItem[];
+}
+
+export interface ClipboardFileItem {
+  name: string;
+  path: string;
+  type: number;
+  is_dir: boolean;
+  size?: number | null;
+  exists: boolean;
 }
 
 export const TypeIconMap: Record<ClipboardType, React.ElementType> = {

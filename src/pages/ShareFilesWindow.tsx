@@ -1,6 +1,8 @@
 import type { MouseEvent } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { listen } from "@tauri-apps/api/event";
 import { toast } from "sonner";
 import {
   Download,
@@ -23,6 +25,7 @@ import {
   addManualSharedPaths,
   listLocalSharedFiles,
   listRemoteShareUsers,
+  refreshLocalShareIndexes,
   revealLocalSharedFile,
   type LocalSharedFileItem,
   type RemoteShareUser,
@@ -35,14 +38,23 @@ type TabKey = "mine" | `remote:${string}`;
 
 type RemoteFileNode = {
   name: string;
-  path: string;
+  relative_path: string;
   is_dir: boolean;
   size?: number;
 };
 
 type RemoteFileListResponse = {
-  current_path: string | null;
+  share_id: string;
+  current_path: string;
   items: RemoteFileNode[];
+};
+
+type RemoteShareItem = {
+  id: string;
+  name: string;
+  type: number;
+  size?: number | null;
+  updated_at?: number | null;
 };
 
 function normalizeBaseUrl(raw: string) {
@@ -76,24 +88,23 @@ function cleanDisplayName(raw: string | undefined, fallback: string) {
   return base.replace(/^[^\w\u4e00-\u9fa5]+/, "").replace(/\s+\([^)]+\)\s*$/, "");
 }
 
-async function fetchRemoteRoots(baseUrl: string) {
-  const response = await fetch(`${baseUrl}/files/list`);
+async function fetchRemoteShares(baseUrl: string) {
+  const response = await fetch(`${baseUrl}/api/client/shares`);
+  if (!response.ok) throw new Error(`加载失败: HTTP ${response.status}`);
+  return (await response.json()) as RemoteShareItem[];
+}
+
+async function fetchRemotePath(baseUrl: string, shareId: string, path?: string) {
+  const qs = path ? `?path=${encodeURIComponent(path)}` : "";
+  const response = await fetch(`${baseUrl}/api/files/${encodeURIComponent(shareId)}/list${qs}`);
   if (!response.ok) throw new Error(`加载失败: HTTP ${response.status}`);
   return (await response.json()) as RemoteFileListResponse;
 }
 
-async function fetchRemotePath(baseUrl: string, path: string) {
-  const response = await fetch(`${baseUrl}/files/list`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ path }),
-  });
-  if (!response.ok) throw new Error(`加载失败: HTTP ${response.status}`);
-  return (await response.json()) as RemoteFileListResponse;
-}
-
-async function downloadRemoteFile(baseUrl: string, node: RemoteFileNode) {
-  const response = await fetch(`${baseUrl}/files/download?path=${encodeURIComponent(node.path)}`);
+async function downloadRemoteFile(baseUrl: string, shareId: string, node: RemoteFileNode) {
+  const response = await fetch(
+    `${baseUrl}/api/client/shares/${encodeURIComponent(shareId)}/download?path=${encodeURIComponent(node.relative_path)}`,
+  );
   if (!response.ok) throw new Error(`下载失败: HTTP ${response.status}`);
   const blob = await response.blob();
   const url = URL.createObjectURL(blob);
@@ -114,6 +125,8 @@ export default function ShareFilesWindow() {
 
   const [remoteUsers, setRemoteUsers] = useState<RemoteShareUser[]>([]);
   const [remoteItems, setRemoteItems] = useState<RemoteFileNode[]>([]);
+  const [remoteShares, setRemoteShares] = useState<RemoteShareItem[]>([]);
+  const [activeRemoteShareId, setActiveRemoteShareId] = useState<string | null>(null);
   const [remoteLoading, setRemoteLoading] = useState(false);
   const [remoteCurrentPath, setRemoteCurrentPath] = useState<string | null>(null);
 
@@ -142,6 +155,15 @@ export default function ShareFilesWindow() {
     }
   };
 
+  const refreshMine = async () => {
+    try {
+      await refreshLocalShareIndexes();
+    } catch (error) {
+      console.error(error);
+    }
+    await loadMySharedFiles();
+  };
+
   const loadRemoteUsers = async () => {
     try {
       setRemoteUsers(await listRemoteShareUsers());
@@ -155,9 +177,18 @@ export default function ShareFilesWindow() {
     if (!activeRemoteBaseUrl || remoteLoading) return;
     setRemoteLoading(true);
     try {
-      const payload = await fetchRemoteRoots(activeRemoteBaseUrl);
-      setRemoteCurrentPath(payload.current_path ?? null);
-      setRemoteItems(payload.items ?? []);
+      const shares = await fetchRemoteShares(activeRemoteBaseUrl);
+      setRemoteShares(shares);
+      const first = shares[0];
+      setActiveRemoteShareId(first?.id ?? null);
+      if (first) {
+        const payload = await fetchRemotePath(activeRemoteBaseUrl, first.id);
+        setRemoteCurrentPath(payload.current_path ?? null);
+        setRemoteItems(payload.items ?? []);
+      } else {
+        setRemoteCurrentPath(null);
+        setRemoteItems([]);
+      }
     } catch (error) {
       console.error(error);
       toast.error("加载远程共享文件失败");
@@ -166,11 +197,11 @@ export default function ShareFilesWindow() {
     }
   };
 
-  const openRemotePath = async (path: string) => {
-    if (!activeRemoteBaseUrl || remoteLoading) return;
+  const openRemotePath = async (path?: string, shareId = activeRemoteShareId) => {
+    if (!activeRemoteBaseUrl || !shareId || remoteLoading) return;
     setRemoteLoading(true);
     try {
-      const payload = await fetchRemotePath(activeRemoteBaseUrl, path);
+      const payload = await fetchRemotePath(activeRemoteBaseUrl, shareId, path);
       setRemoteCurrentPath(payload.current_path ?? null);
       setRemoteItems(payload.items ?? []);
     } catch (error) {
@@ -216,8 +247,17 @@ export default function ShareFilesWindow() {
   };
 
   useEffect(() => {
-    void loadMySharedFiles();
+    void refreshMine();
     void loadRemoteUsers();
+  }, []);
+
+  useEffect(() => {
+    const unlisten = listen("share://local-files-changed", () => {
+      void loadMySharedFiles();
+    });
+    return () => {
+      unlisten.then((off) => off());
+    };
   }, []);
 
   useEffect(() => {
@@ -238,12 +278,63 @@ export default function ShareFilesWindow() {
     try {
       const added = await addManualSharedPaths(paths);
       toast.success(`已添加 ${added} 个共享项`);
-      await loadMySharedFiles();
+      await refreshMine();
     } catch (error) {
       console.error(error);
       toast.error("添加共享路径失败");
     }
   };
+
+  const shareDroppedPaths = async (paths: string[]) => {
+    const cleaned = paths.map((p) => p.trim()).filter(Boolean);
+    if (cleaned.length === 0) {
+      toast.error("未检测到可共享路径");
+      return;
+    }
+    try {
+      const added = await addManualSharedPaths(cleaned);
+      if (added === 0) {
+        toast.error("没有可共享的有效路径");
+        return;
+      }
+      toast.success(`已添加 ${added} 个共享项`);
+      await refreshMine();
+      setTab("mine");
+    } catch (error) {
+      console.error(error);
+      toast.error("添加共享路径失败");
+    }
+  };
+
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+    getCurrentWebview()
+      .onDragDropEvent((event) => {
+        if (event.payload.type === "over") {
+          setDragActive(true);
+        } else if (event.payload.type === "drop") {
+          setDragActive(false);
+          void shareDroppedPaths(event.payload.paths);
+        } else {
+          setDragActive(false);
+        }
+      })
+      .then((off) => {
+        if (disposed) {
+          off();
+          return;
+        }
+        unlisten = off;
+      })
+      .catch((error) => {
+        console.error(error);
+      });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
 
   const handleTitleBarMouseDown = async (e: MouseEvent<HTMLElement>) => {
     if (e.button !== 0) return;
@@ -354,7 +445,7 @@ export default function ShareFilesWindow() {
         </div>
 
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={() => void (tab === "mine" ? loadMySharedFiles() : loadRemoteRoot())}>
+          <Button variant="outline" size="sm" onClick={() => void (tab === "mine" ? refreshMine() : loadRemoteRoot())}>
             <RefreshCcw size={14} className="mr-1" />刷新
           </Button>
           <Button variant="ghost" size="sm" onClick={() => operationWindow("close", "shared-files")}><X /></Button>
@@ -397,19 +488,36 @@ export default function ShareFilesWindow() {
         ) : (
           <div className="flex h-full flex-col">
             <div className="border-b px-3 py-2 text-xs text-muted-foreground">{activeRemote?.user_name} | {remoteCurrentPath ?? "根目录"}</div>
+            {remoteShares.length > 1 ? (
+              <div className="flex gap-2 border-b px-3 py-2">
+                {remoteShares.map((share) => (
+                  <Button
+                    key={share.id}
+                    size="sm"
+                    variant={activeRemoteShareId === share.id ? "default" : "outline"}
+                    onClick={() => {
+                      setActiveRemoteShareId(share.id);
+                      void openRemotePath(undefined, share.id);
+                    }}
+                  >
+                    {share.name}
+                  </Button>
+                ))}
+              </div>
+            ) : null}
             <div className={`flex-1 content-start overflow-y-auto p-3 ${viewMode === "icons" ? "grid auto-rows-min grid-cols-2 gap-2 md:grid-cols-4" : viewMode === "tiles" ? "grid auto-rows-min grid-cols-1 gap-2 md:grid-cols-2" : "space-y-0"}`}>
               {remoteLoading ? <p className="text-sm text-muted-foreground">加载中...</p> : null}
               {!remoteLoading && remoteItems.length === 0 ? <p className="text-sm text-muted-foreground">暂无可浏览文件</p> : null}
               {remoteItems.map((node) =>
                 renderGridItem(
-                  node.path,
+                  node.relative_path,
                   node.name,
-                  node.path,
+                  node.relative_path,
                   node.is_dir,
                   node.size,
                   undefined,
-                  () => void openRemotePath(node.path),
-                  () => void downloadRemoteFile(activeRemoteBaseUrl, node),
+                  () => void openRemotePath(node.relative_path),
+                  () => activeRemoteShareId && void downloadRemoteFile(activeRemoteBaseUrl, activeRemoteShareId, node),
                 ),
               )}
             </div>

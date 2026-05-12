@@ -8,7 +8,13 @@ mod server;
 mod services;
 mod utils;
 
-use app::commands::{clipboard, config as config_commands, server as server_commands, share_files as share_files_commands};
+use crate::app::commands::window;
+use crate::db::service::cleanup::{cleanup_invalid_items, cleanup_old_items};
+use crate::services::clipboard_watcher::start_clipboard_watcher;
+use app::commands::{
+    clipboard, config as config_commands, server as server_commands,
+    share_files as share_files_commands,
+};
 use app::config::AppConfigStore;
 use app::shortcuts::global::init_register_shortcut;
 use app::ui::tray::init_menu;
@@ -16,9 +22,6 @@ use app::ui::window::init_app;
 use db::{init_db, DbState};
 use log::{error, info};
 use tauri::Manager;
-use crate::app::commands::window;
-use crate::db::service::cleanup::{cleanup_invalid_items, cleanup_old_items};
-use crate::services::clipboard_watcher::start_clipboard_watcher;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -57,9 +60,12 @@ pub fn run() {
 
             if config.enable_share_server {
                 let server_state = app.state::<server::ServerState>();
-                if let Err(e) = server_state.start(&config.share_server_bind_ip, config.share_server_port) {
+                if let Err(e) =
+                    server_state.start(&config.share_server_bind_ip, config.share_server_port)
+                {
                     error!("start share server failed: {}", e);
                 }
+                app::ui::tray::update_share_server_menu_label(&app.handle());
             }
 
             info!("share-clip started");
@@ -87,6 +93,7 @@ pub fn run() {
             share_files_commands::reveal_local_shared_file,
             share_files_commands::unshare_local_shared_file,
             share_files_commands::add_manual_shared_paths,
+            share_files_commands::refresh_local_share_indexes,
             window::operation_window,
         ])
         .run(tauri::generate_context!())

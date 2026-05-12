@@ -1,5 +1,3 @@
-
-
 // 窗口相关操纵
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -13,7 +11,7 @@ pub enum WindowOperations {
 // 窗口label
 pub enum WindowLabel {
     Clipboard, // 剪切板
-    Config, // 设置
+    Config,    // 设置
     ShareFile, // 分享文件
 }
 
@@ -41,5 +39,4 @@ impl WindowLabel {
             WindowLabel::ShareFile => "shared-files",
         }
     }
-
 }

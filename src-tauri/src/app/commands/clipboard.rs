@@ -243,6 +243,20 @@ pub async fn toggle_share(app: tauri::AppHandle, id: i32) -> Result<bool, ApiErr
             error!("toggle_share failed: id={id}, error={e}");
             AppError::from(e)
         })?;
+    if data {
+        if let Err(error) = crate::server::sync::scan_local_shares_once(&db.conn).await {
+            error!("scan local shares after toggle_share failed: id={id}, error={error}");
+        }
+    }
+    crate::app::events::emit_local_files_changed(
+        &app,
+        Vec::new(),
+        if data {
+            "clipboard_share_enabled"
+        } else {
+            "clipboard_share_disabled"
+        },
+    );
     Ok(data)
 }
 

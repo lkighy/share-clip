@@ -27,9 +27,15 @@ type AppConfigForm = {
   default_share_image: boolean;
   default_share_file: boolean;
   default_share_folder: boolean;
+  unshare_on_clipboard_change: boolean;
   enable_share_server: boolean;
   share_server_bind_ip: string;
   share_server_port: string;
+  share_server_password_enabled: boolean;
+  share_server_password_hash: string;
+  share_server_auth_mode: string;
+  browser_access_enabled: boolean;
+  sync_access_enabled: boolean;
 };
 
 const emptyForm: AppConfigForm = {
@@ -46,9 +52,15 @@ const emptyForm: AppConfigForm = {
   default_share_image: false,
   default_share_file: false,
   default_share_folder: false,
+  unshare_on_clipboard_change: true,
   enable_share_server: false,
   share_server_bind_ip: "0.0.0.0",
   share_server_port: "24800",
+  share_server_password_enabled: false,
+  share_server_password_hash: "",
+  share_server_auth_mode: "1",
+  browser_access_enabled: true,
+  sync_access_enabled: true,
 };
 
 function toForm(config: AppConfig): AppConfigForm {
@@ -66,9 +78,15 @@ function toForm(config: AppConfig): AppConfigForm {
     default_share_image: config.default_share_image ?? false,
     default_share_file: config.default_share_file ?? false,
     default_share_folder: config.default_share_folder ?? false,
+    unshare_on_clipboard_change: config.unshare_on_clipboard_change ?? true,
     enable_share_server: config.enable_share_server ?? false,
     share_server_bind_ip: config.share_server_bind_ip ?? "0.0.0.0",
     share_server_port: String(config.share_server_port ?? 24800),
+    share_server_password_enabled: config.share_server_password_enabled ?? false,
+    share_server_password_hash: config.share_server_password_hash ?? "",
+    share_server_auth_mode: String(config.share_server_auth_mode ?? 1),
+    browser_access_enabled: config.browser_access_enabled ?? true,
+    sync_access_enabled: config.sync_access_enabled ?? true,
   };
 }
 
@@ -156,8 +174,13 @@ export default function AppConfigWindow() {
       const height = parseInteger(form.clipboard_window_height, "窗口高度", 120);
       const spacing = parseInteger(form.clipboard_window_spacing, "窗口间距", 0);
       const shareServerPort = parseInteger(form.share_server_port, "共享服务端口", 1);
+      const shareServerAuthMode = parseInteger(form.share_server_auth_mode, "授权模式", 0);
       if (shareServerPort > 65535) {
         toast.error("共享服务端口不能大于65535");
+        return;
+      }
+      if (![0, 1].includes(shareServerAuthMode)) {
+        toast.error("授权模式无效");
         return;
       }
 
@@ -186,9 +209,15 @@ export default function AppConfigWindow() {
         default_share_image: form.default_share_image,
         default_share_file: form.default_share_file,
         default_share_folder: form.default_share_folder,
+        unshare_on_clipboard_change: form.unshare_on_clipboard_change,
         enable_share_server: form.enable_share_server,
         share_server_bind_ip: shareServerBindIp,
         share_server_port: shareServerPort,
+        share_server_password_enabled: form.share_server_password_enabled,
+        share_server_password_hash: form.share_server_password_hash.trim() || null,
+        share_server_auth_mode: shareServerAuthMode,
+        browser_access_enabled: form.browser_access_enabled,
+        sync_access_enabled: form.sync_access_enabled,
       };
 
       await saveAppConfig(payload);
@@ -234,6 +263,29 @@ export default function AppConfigWindow() {
                 <label className="space-y-1 text-sm">
                   <span className="text-muted-foreground">共享服务端口</span>
                   <input className="h-9 w-full rounded-md border bg-transparent px-3 text-sm outline-none focus:ring-2 focus:ring-ring" value={form.share_server_port} onChange={(e) => setForm((prev) => ({ ...prev, share_server_port: e.target.value }))} placeholder="24800" />
+                </label>
+                <label className="flex items-center gap-2 text-sm">
+                  <input type="checkbox" checked={form.share_server_password_enabled} onChange={(e) => setForm((prev) => ({ ...prev, share_server_password_enabled: e.target.checked }))} />
+                  <span className="text-muted-foreground">启用访问密码</span>
+                </label>
+                <label className="space-y-1 text-sm">
+                  <span className="text-muted-foreground">密码哈希</span>
+                  <input className="h-9 w-full rounded-md border bg-transparent px-3 text-sm outline-none focus:ring-2 focus:ring-ring" value={form.share_server_password_hash} onChange={(e) => setForm((prev) => ({ ...prev, share_server_password_hash: e.target.value }))} placeholder="后续授权链路使用" />
+                </label>
+                <label className="space-y-1 text-sm">
+                  <span className="text-muted-foreground">授权模式</span>
+                  <select className="h-9 w-full rounded-md border bg-transparent px-3 text-sm outline-none focus:ring-2 focus:ring-ring" value={form.share_server_auth_mode} onChange={(e) => setForm((prev) => ({ ...prev, share_server_auth_mode: e.target.value }))}>
+                    <option value="1">需要确认</option>
+                    <option value="0">自动授权</option>
+                  </select>
+                </label>
+                <label className="flex items-center gap-2 text-sm">
+                  <input type="checkbox" checked={form.browser_access_enabled} onChange={(e) => setForm((prev) => ({ ...prev, browser_access_enabled: e.target.checked }))} />
+                  <span className="text-muted-foreground">允许浏览器浏览下载</span>
+                </label>
+                <label className="flex items-center gap-2 text-sm">
+                  <input type="checkbox" checked={form.sync_access_enabled} onChange={(e) => setForm((prev) => ({ ...prev, sync_access_enabled: e.target.checked }))} />
+                  <span className="text-muted-foreground">允许客户端同步访问</span>
                 </label>
               </div>
             </section>
@@ -305,6 +357,7 @@ export default function AppConfigWindow() {
                 <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.default_share_image} onChange={(e) => setForm((prev) => ({ ...prev, default_share_image: e.target.checked }))} /><span className="text-muted-foreground">图片</span></label>
                 <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.default_share_file} onChange={(e) => setForm((prev) => ({ ...prev, default_share_file: e.target.checked }))} /><span className="text-muted-foreground">文件</span></label>
                 <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.default_share_folder} onChange={(e) => setForm((prev) => ({ ...prev, default_share_folder: e.target.checked }))} /><span className="text-muted-foreground">文件夹</span></label>
+                <label className="flex items-center gap-2 text-sm sm:col-span-2"><input type="checkbox" checked={form.unshare_on_clipboard_change} onChange={(e) => setForm((prev) => ({ ...prev, unshare_on_clipboard_change: e.target.checked }))} /><span className="text-muted-foreground">剪贴板变化时取消上一条临时分享</span></label>
               </div>
             </section>
           </div>
@@ -320,4 +373,3 @@ export default function AppConfigWindow() {
     </main>
   );
 }
-

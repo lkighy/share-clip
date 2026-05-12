@@ -33,12 +33,24 @@ pub struct AppConfig {
     pub default_share_file: bool,
     // 是否默认分享文件夹，默认为 false
     pub default_share_folder: bool,
+    // 剪贴板变化时取消上一条剪贴板来源的临时分享
+    pub unshare_on_clipboard_change: bool,
     // 是否启用共享服务器
     pub enable_share_server: bool,
     // 共享服务器绑定IP
     pub share_server_bind_ip: String,
     // 共享服务端口（文件列表/下载/diff）
     pub share_server_port: u16,
+    // 是否启用共享服务器密码
+    pub share_server_password_enabled: bool,
+    // 共享服务器密码哈希（后续授权链路使用）
+    pub share_server_password_hash: Option<String>,
+    // 授权模式：0=自动授权，1=需要确认
+    pub share_server_auth_mode: i32,
+    // 是否允许浏览器访问
+    pub browser_access_enabled: bool,
+    // 是否允许客户端同步访问
+    pub sync_access_enabled: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -56,9 +68,15 @@ pub struct AppConfigUpdate {
     pub default_share_image: Option<bool>,
     pub default_share_file: Option<bool>,
     pub default_share_folder: Option<bool>,
+    pub unshare_on_clipboard_change: Option<bool>,
     pub enable_share_server: Option<bool>,
     pub share_server_bind_ip: Option<String>,
     pub share_server_port: Option<u16>,
+    pub share_server_password_enabled: Option<bool>,
+    pub share_server_password_hash: Option<Option<String>>,
+    pub share_server_auth_mode: Option<i32>,
+    pub browser_access_enabled: Option<bool>,
+    pub sync_access_enabled: Option<bool>,
 }
 
 impl AppConfigUpdate {
@@ -102,6 +120,9 @@ impl AppConfigUpdate {
         if let Some(value) = self.default_share_folder {
             config.default_share_folder = value;
         }
+        if let Some(value) = self.unshare_on_clipboard_change {
+            config.unshare_on_clipboard_change = value;
+        }
         if let Some(value) = self.enable_share_server {
             config.enable_share_server = value;
         }
@@ -110,6 +131,21 @@ impl AppConfigUpdate {
         }
         if let Some(value) = self.share_server_port {
             config.share_server_port = value;
+        }
+        if let Some(value) = self.share_server_password_enabled {
+            config.share_server_password_enabled = value;
+        }
+        if let Some(value) = self.share_server_password_hash {
+            config.share_server_password_hash = value;
+        }
+        if let Some(value) = self.share_server_auth_mode {
+            config.share_server_auth_mode = value;
+        }
+        if let Some(value) = self.browser_access_enabled {
+            config.browser_access_enabled = value;
+        }
+        if let Some(value) = self.sync_access_enabled {
+            config.sync_access_enabled = value;
         }
     }
 }
@@ -130,9 +166,15 @@ impl Default for AppConfig {
             default_share_image: false,
             default_share_file: false,
             default_share_folder: false,
+            unshare_on_clipboard_change: true,
             enable_share_server: false,
             share_server_bind_ip: "0.0.0.0".to_string(),
             share_server_port: 24800,
+            share_server_password_enabled: false,
+            share_server_password_hash: None,
+            share_server_auth_mode: 1,
+            browser_access_enabled: true,
+            sync_access_enabled: true,
         }
     }
 }

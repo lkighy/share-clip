@@ -113,6 +113,9 @@ impl MigrationTrait for Migration {
                     .col(ColumnDef::new(LocalFiles::SourceClipboardId).text())
                     .col(ColumnDef::new(LocalFiles::SourceType).integer().not_null().default(0))
                     .col(ColumnDef::new(LocalFiles::IsFavorite).integer().not_null().default(0))
+                    .col(ColumnDef::new(LocalFiles::ShareMode).integer().not_null().default(0))
+                    .col(ColumnDef::new(LocalFiles::ExpiresAt).big_integer())
+                    .col(ColumnDef::new(LocalFiles::UpdatedAt).big_integer())
                     .to_owned(),
             )
             .await?;
@@ -142,6 +145,12 @@ impl MigrationTrait for Migration {
                     .col(ColumnDef::new(SharedFiles::AccessCount).integer().not_null().default(0))
                     .col(ColumnDef::new(SharedFiles::Size).big_integer())
                     .col(ColumnDef::new(SharedFiles::CacheStatus).integer().not_null().default(0))
+                    .col(ColumnDef::new(SharedFiles::RemoteName).text())
+                    .col(ColumnDef::new(SharedFiles::RemoteType).integer().not_null().default(0))
+                    .col(ColumnDef::new(SharedFiles::RemoteSize).big_integer())
+                    .col(ColumnDef::new(SharedFiles::RemoteUpdatedAt).big_integer())
+                    .col(ColumnDef::new(SharedFiles::LastAccessedAt).big_integer())
+                    .col(ColumnDef::new(SharedFiles::SyncPolicy).integer().not_null().default(0))
                     .primary_key(
                         Index::create()
                             .col(SharedFiles::UserId)
@@ -177,6 +186,11 @@ impl MigrationTrait for Migration {
                     .col(ColumnDef::new(OutboundConnections::UserName).string().not_null())
                     .col(ColumnDef::new(OutboundConnections::Password).string())
                     .col(ColumnDef::new(OutboundConnections::Ip).string().not_null())
+                    .col(ColumnDef::new(OutboundConnections::DeviceId).text())
+                    .col(ColumnDef::new(OutboundConnections::DisplayName).text())
+                    .col(ColumnDef::new(OutboundConnections::AuthToken).text())
+                    .col(ColumnDef::new(OutboundConnections::AuthStatus).integer().not_null().default(0))
+                    .col(ColumnDef::new(OutboundConnections::LastConnectedAt).big_integer())
                     .to_owned(),
             )
             .await?;
@@ -196,6 +210,12 @@ impl MigrationTrait for Migration {
                     .col(ColumnDef::new(InboundConnections::IsShared).integer().not_null().default(0))
                     .col(ColumnDef::new(InboundConnections::IsTrusted).integer().not_null().default(0))
                     .col(ColumnDef::new(InboundConnections::Ip).string().not_null())
+                    .col(ColumnDef::new(InboundConnections::DeviceId).text())
+                    .col(ColumnDef::new(InboundConnections::UserName).text())
+                    .col(ColumnDef::new(InboundConnections::AuthStatus).integer().not_null().default(0))
+                    .col(ColumnDef::new(InboundConnections::GrantedAt).big_integer())
+                    .col(ColumnDef::new(InboundConnections::RevokedAt).big_integer())
+                    .col(ColumnDef::new(InboundConnections::LastSeenAt).big_integer())
                     .to_owned(),
             )
             .await?;
@@ -226,10 +246,99 @@ impl MigrationTrait for Migration {
                     .col(ConnectionLog::Timestamp)
                     .to_owned(),
             )
+            .await?;
+
+        manager
+            .create_table(
+                Table::create()
+                    .table(LocalFileIndex::Table)
+                    .if_not_exists()
+                    .col(ColumnDef::new(LocalFileIndex::LocalFileId).string().not_null())
+                    .col(ColumnDef::new(LocalFileIndex::RelativePath).text().not_null())
+                    .col(ColumnDef::new(LocalFileIndex::AbsolutePath).text().not_null())
+                    .col(ColumnDef::new(LocalFileIndex::Size).big_integer().not_null())
+                    .col(ColumnDef::new(LocalFileIndex::Mtime).big_integer().not_null())
+                    .col(ColumnDef::new(LocalFileIndex::IsDir).integer().not_null().default(0))
+                    .col(ColumnDef::new(LocalFileIndex::Hash).string())
+                    .col(ColumnDef::new(LocalFileIndex::Dirty).integer().not_null().default(1))
+                    .col(ColumnDef::new(LocalFileIndex::ExistsFlag).integer().not_null().default(1))
+                    .col(ColumnDef::new(LocalFileIndex::LastSeenAt).big_integer().not_null())
+                    .col(ColumnDef::new(LocalFileIndex::LastHashedAt).big_integer())
+                    .primary_key(
+                        Index::create()
+                            .col(LocalFileIndex::LocalFileId)
+                            .col(LocalFileIndex::RelativePath),
+                    )
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_index(
+                Index::create()
+                    .name("idx_local_file_index_absolute_path")
+                    .table(LocalFileIndex::Table)
+                    .col(LocalFileIndex::AbsolutePath)
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_index(
+                Index::create()
+                    .name("idx_local_file_index_dirty")
+                    .table(LocalFileIndex::Table)
+                    .col(LocalFileIndex::Dirty)
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_table(
+                Table::create()
+                    .table(SharedFileIndex::Table)
+                    .if_not_exists()
+                    .col(ColumnDef::new(SharedFileIndex::UserId).string().not_null())
+                    .col(ColumnDef::new(SharedFileIndex::SharedFileId).string().not_null())
+                    .col(ColumnDef::new(SharedFileIndex::RelativePath).text().not_null())
+                    .col(ColumnDef::new(SharedFileIndex::Name).text().not_null())
+                    .col(ColumnDef::new(SharedFileIndex::IsDir).integer().not_null().default(0))
+                    .col(ColumnDef::new(SharedFileIndex::LocalCachePath).text())
+                    .col(ColumnDef::new(SharedFileIndex::Size).big_integer())
+                    .col(ColumnDef::new(SharedFileIndex::Mtime).big_integer())
+                    .col(ColumnDef::new(SharedFileIndex::Hash).string())
+                    .col(ColumnDef::new(SharedFileIndex::RemoteDeleted).integer().not_null().default(0))
+                    .col(ColumnDef::new(SharedFileIndex::CacheStatus).integer().not_null().default(0))
+                    .col(ColumnDef::new(SharedFileIndex::LastAccessedAt).big_integer())
+                    .col(ColumnDef::new(SharedFileIndex::UpdatedAt).big_integer())
+                    .primary_key(
+                        Index::create()
+                            .col(SharedFileIndex::UserId)
+                            .col(SharedFileIndex::SharedFileId)
+                            .col(SharedFileIndex::RelativePath),
+                    )
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_index(
+                Index::create()
+                    .name("idx_shared_file_index_cache_status")
+                    .table(SharedFileIndex::Table)
+                    .col(SharedFileIndex::CacheStatus)
+                    .to_owned(),
+            )
             .await
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .drop_table(Table::drop().table(SharedFileIndex::Table).to_owned())
+            .await?;
+        manager
+            .drop_table(Table::drop().table(LocalFileIndex::Table).to_owned())
+            .await?;
         manager
             .drop_table(Table::drop().table(ConnectionLog::Table).to_owned())
             .await?;
@@ -305,6 +414,12 @@ enum LocalFiles {
     SourceType,
     // 是否收藏：0/1
     IsFavorite,
+    // 分享模式：0=手动长期分享，1=剪贴板临时分享
+    ShareMode,
+    // 临时分享过期时间
+    ExpiresAt,
+    // 更新时间
+    UpdatedAt,
 }
 
 #[derive(DeriveIden)]
@@ -326,6 +441,18 @@ enum SharedFiles {
     Size,
     // 缓存状态：0=NotCached, 1=Caching, 2=Cached, 3=Failed
     CacheStatus,
+    // 远端展示名
+    RemoteName,
+    // 远端类型
+    RemoteType,
+    // 远端大小
+    RemoteSize,
+    // 远端更新时间
+    RemoteUpdatedAt,
+    // 最近访问时间
+    LastAccessedAt,
+    // 同步策略：0=按需同步，1=保持同步
+    SyncPolicy,
 }
 
 #[derive(DeriveIden)]
@@ -339,6 +466,11 @@ enum OutboundConnections {
     Password,
     // 远端IP
     Ip,
+    DeviceId,
+    DisplayName,
+    AuthToken,
+    AuthStatus,
+    LastConnectedAt,
 }
 
 #[derive(DeriveIden)]
@@ -352,6 +484,12 @@ enum InboundConnections {
     IsTrusted,
     // 对端IP
     Ip,
+    DeviceId,
+    UserName,
+    AuthStatus,
+    GrantedAt,
+    RevokedAt,
+    LastSeenAt,
 }
 
 #[derive(DeriveIden)]
@@ -369,4 +507,38 @@ pub enum ConnectionLog {
     Timestamp,
     // 对端IP
     Ip,
+}
+
+#[derive(DeriveIden)]
+enum LocalFileIndex {
+    Table,
+    LocalFileId,
+    RelativePath,
+    AbsolutePath,
+    Size,
+    Mtime,
+    IsDir,
+    Hash,
+    Dirty,
+    ExistsFlag,
+    LastSeenAt,
+    LastHashedAt,
+}
+
+#[derive(DeriveIden)]
+enum SharedFileIndex {
+    Table,
+    UserId,
+    SharedFileId,
+    RelativePath,
+    Name,
+    IsDir,
+    LocalCachePath,
+    Size,
+    Mtime,
+    Hash,
+    RemoteDeleted,
+    CacheStatus,
+    LastAccessedAt,
+    UpdatedAt,
 }
