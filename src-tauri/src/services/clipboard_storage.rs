@@ -11,6 +11,10 @@ use tauri::Manager;
 use uuid::Uuid;
 
 use crate::app::config::AppConfigStore;
+use crate::db::service::local_files::{
+    has_direct_source, parse_source_clipboard_ids, source_type_after_adding_clipboard,
+    SHARE_MODE_MANUAL, SHARE_MODE_TEMP, SOURCE_CLIPBOARD,
+};
 use crate::db::DbState;
 use crate::entity::{clipboard_record, local_files};
 use crate::models::clipboard::ClipboardType;
@@ -177,9 +181,6 @@ pub async fn save_clipboard_item(
         new_item.insert(db).await?
     };
 
-    if config.unshare_on_clipboard_change {
-        unshare_previous_clipboard_temp_files(db, saved_record.id).await?;
-    }
     if saved_record.is_shared == 1 {
         upsert_temp_local_files_for_clipboard(db, &saved_record).await?;
     }
@@ -189,41 +190,6 @@ pub async fn save_clipboard_item(
         "clipboard_saved",
     );
     crate::app::events::emit_local_files_changed(&app_handle, Vec::new(), "clipboard_changed");
-
-    Ok(())
-}
-
-async fn unshare_previous_clipboard_temp_files(
-    db: &sea_orm::DatabaseConnection,
-    current_clipboard_id: i32,
-) -> StorageResult<()> {
-    let rows = local_files::Entity::find()
-        .filter(local_files::Column::SourceType.eq(1))
-        .filter(local_files::Column::ShareMode.eq(1))
-        .filter(local_files::Column::IsValid.eq(1))
-        .all(db)
-        .await?;
-
-    for row in rows {
-        let mut ids = parse_source_clipboard_ids(row.source_clipboard_id.as_deref());
-        if ids.contains(&current_clipboard_id) {
-            continue;
-        }
-        if ids.is_empty() {
-            continue;
-        }
-        ids.retain(|id| *id == current_clipboard_id);
-
-        let mut am: local_files::ActiveModel = row.into();
-        if ids.is_empty() {
-            am.is_valid = Set(0);
-            am.source_clipboard_id = Set(None);
-        } else {
-            am.source_clipboard_id = Set(Some(serde_json::to_string(&ids)?));
-        }
-        am.updated_at = Set(Some(now_ts()));
-        am.update(db).await?;
-    }
 
     Ok(())
 }
@@ -261,12 +227,18 @@ async fn upsert_temp_local_files_for_clipboard(
             if !ids.contains(&record.id) {
                 ids.push(record.id);
             }
+            let source_type = source_type_after_adding_clipboard(existing.source_type);
+            let share_mode = if has_direct_source(existing.source_type) {
+                SHARE_MODE_MANUAL
+            } else {
+                SHARE_MODE_TEMP
+            };
             let mut am: local_files::ActiveModel = existing.into();
             am.is_valid = Set(1);
             am.size = Set(size);
             am.r#type = Set(file_type);
-            am.source_type = Set(1);
-            am.share_mode = Set(1);
+            am.source_type = Set(source_type);
+            am.share_mode = Set(share_mode);
             am.source_clipboard_id = Set(Some(serde_json::to_string(&ids)?));
             am.updated_at = Set(Some(now));
             am.update(db).await?;
@@ -280,9 +252,9 @@ async fn upsert_temp_local_files_for_clipboard(
                 is_valid: Set(1),
                 size: Set(size),
                 source_clipboard_id: Set(Some(serde_json::to_string(&vec![record.id])?)),
-                source_type: Set(1),
+                source_type: Set(SOURCE_CLIPBOARD),
                 is_favorite: Set(0),
-                share_mode: Set(1),
+                share_mode: Set(SHARE_MODE_TEMP),
                 expires_at: Set(None),
                 updated_at: Set(Some(now)),
             };
@@ -318,13 +290,6 @@ fn local_file_type_from_clipboard_type(clipboard_type: i32, path: &Path) -> i32 
         return 2;
     }
     0
-}
-
-fn parse_source_clipboard_ids(raw: Option<&str>) -> Vec<i32> {
-    let Some(raw) = raw else {
-        return Vec::new();
-    };
-    serde_json::from_str::<Vec<i32>>(raw).unwrap_or_default()
 }
 
 fn now_ts() -> i64 {

@@ -410,7 +410,7 @@ enum LocalFiles {
     Size,
     // 来源剪贴板ID列表（JSON）
     SourceClipboardId,
-    // 来源类型：0=直接文件，1=剪贴板条目
+    // 来源类型：0=直接文件，1=剪贴板条目，2=直接文件+剪贴板条目
     SourceType,
     // 是否收藏：0/1
     IsFavorite,

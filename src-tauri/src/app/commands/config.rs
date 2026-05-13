@@ -23,27 +23,31 @@ pub fn update_app_config(
         .update_with(payload)
         .map_err(|err| AppError::InvalidInput(err.to_string()))?;
 
-    let _ = app.global_shortcut().unregister(previous.shortcut.trim());
-    init_register_shortcut(&app);
+    if previous.shortcut != updated.shortcut {
+        let _ = app.global_shortcut().unregister(previous.shortcut.trim());
+        init_register_shortcut(&app);
+    }
 
-    if let Some(window) = app.get_window("index") {
-        let _ = window.set_size(tauri::LogicalSize::new(
-            updated.clipboard_window_width.max(200) as f64,
-            updated.clipboard_window_height.max(120) as f64,
-        ));
+    let window_size_changed = previous.clipboard_window_width != updated.clipboard_window_width
+        || previous.clipboard_window_height != updated.clipboard_window_height;
+    if window_size_changed {
+        if let Some(window) = app.get_window("index") {
+            let _ = window.set_size(tauri::LogicalSize::new(
+                updated.clipboard_window_width.max(200) as f64,
+                updated.clipboard_window_height.max(120) as f64,
+            ));
+        }
     }
 
     let server_state = app.state::<crate::server::ServerState>();
     let was_running = server_state.is_running().unwrap_or(false);
-    if updated.enable_share_server {
-        if was_running {
-            let _ = server_state.stop();
-        }
+    let server_bind_changed = previous.share_server_bind_ip != updated.share_server_bind_ip
+        || previous.share_server_port != updated.share_server_port;
+    if was_running && server_bind_changed {
+        let _ = server_state.stop();
         server_state
             .start(&updated.share_server_bind_ip, updated.share_server_port)
             .map_err(AppError::InvalidInput)?;
-    } else if was_running {
-        let _ = server_state.stop();
     }
     crate::app::ui::tray::update_share_server_menu_label(&app);
 

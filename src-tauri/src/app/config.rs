@@ -33,10 +33,11 @@ pub struct AppConfig {
     pub default_share_file: bool,
     // 是否默认分享文件夹，默认为 false
     pub default_share_folder: bool,
-    // 剪贴板变化时取消上一条剪贴板来源的临时分享
+    // 剪贴板来源文件变化时标记对应临时分享失效
     pub unshare_on_clipboard_change: bool,
-    // 是否启用共享服务器
-    pub enable_share_server: bool,
+    // 是否在应用启动时自动启动共享服务器
+    #[serde(alias = "enable_share_server")]
+    pub auto_start_share_server: bool,
     // 共享服务器绑定IP
     pub share_server_bind_ip: String,
     // 共享服务端口（文件列表/下载/diff）
@@ -69,6 +70,8 @@ pub struct AppConfigUpdate {
     pub default_share_file: Option<bool>,
     pub default_share_folder: Option<bool>,
     pub unshare_on_clipboard_change: Option<bool>,
+    pub auto_start_share_server: Option<bool>,
+    #[serde(alias = "enable_share_server")]
     pub enable_share_server: Option<bool>,
     pub share_server_bind_ip: Option<String>,
     pub share_server_port: Option<u16>,
@@ -123,8 +126,8 @@ impl AppConfigUpdate {
         if let Some(value) = self.unshare_on_clipboard_change {
             config.unshare_on_clipboard_change = value;
         }
-        if let Some(value) = self.enable_share_server {
-            config.enable_share_server = value;
+        if let Some(value) = self.auto_start_share_server.or(self.enable_share_server) {
+            config.auto_start_share_server = value;
         }
         if let Some(value) = self.share_server_bind_ip {
             config.share_server_bind_ip = value;
@@ -167,7 +170,7 @@ impl Default for AppConfig {
             default_share_file: false,
             default_share_folder: false,
             unshare_on_clipboard_change: true,
-            enable_share_server: false,
+            auto_start_share_server: false,
             share_server_bind_ip: "0.0.0.0".to_string(),
             share_server_port: 24800,
             share_server_password_enabled: false,

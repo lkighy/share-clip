@@ -42,7 +42,7 @@ pub fn open_or_create_window(app: &tauri::AppHandle, label: WindowLabel) -> Resu
     )
     .title(label.title())
     .inner_size(980.0, 700.0)
-    .skip_taskbar(true)
+    .skip_taskbar(matches!(label, WindowLabel::Clipboard))
     .decorations(false)
     .build()
     .map_err(|e| e.to_string())?;

@@ -11,15 +11,16 @@ pub fn init_register_shortcut(app: &AppHandle) {
     let shortcut = config.shortcut.trim().to_string();
     let _ = app.global_shortcut().unregister(shortcut.as_str());
 
-    let window_width = config.clipboard_window_width;
-    let window_height = config.clipboard_window_height;
-    let spacing = config.clipboard_window_spacing;
-
     let _ = app
         .global_shortcut()
         .on_shortcut(shortcut.as_str(), move |app, _, _| {
             if let Some(window) = app.get_window("index") {
                 if let Ok(false) = window.is_visible() {
+                    let config = app.state::<AppConfigStore>().get();
+                    let window_width = config.clipboard_window_width;
+                    let window_height = config.clipboard_window_height;
+                    let spacing = config.clipboard_window_spacing;
+
                     let _ = window.set_size(LogicalSize::new(
                         window_width.max(200) as f64,
                         window_height.max(120) as f64,

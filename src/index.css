@@ -32,5 +32,89 @@
 
   body {
     @apply bg-background text-foreground;
+    font-family: "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+    letter-spacing: 0;
+  }
+}
+
+@layer components {
+  .fluent-shell {
+    @apply min-h-screen text-slate-950;
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.86), rgba(248, 250, 253, 0.94)),
+      linear-gradient(135deg, #f7fbff 0%, #f2f6fb 42%, #eef3f8 100%);
+  }
+
+  .fluent-titlebar {
+    @apply flex h-12 shrink-0 items-center justify-between border-b border-white/70 px-3;
+    background: rgba(255, 255, 255, 0.72);
+    box-shadow: 0 1px 0 rgba(15, 23, 42, 0.04);
+    backdrop-filter: blur(18px);
+  }
+
+  .fluent-commandbar {
+    @apply flex items-center gap-2 rounded-lg border border-white/70 bg-white/70 px-2 py-2 shadow-sm;
+    backdrop-filter: blur(18px);
+  }
+
+  .fluent-panel {
+    @apply rounded-lg border border-white/70 shadow-sm;
+    background: rgba(255, 255, 255, 0.78);
+    box-shadow: 0 10px 28px rgba(15, 23, 42, 0.07), inset 0 1px 0 rgba(255, 255, 255, 0.85);
+  }
+
+  .fluent-card {
+    @apply rounded-lg border border-slate-200/80 shadow-sm transition-colors;
+    background: rgba(255, 255, 255, 0.86);
+  }
+
+  .fluent-card:hover {
+    @apply bg-white;
+    box-shadow: 0 8px 20px rgba(15, 23, 42, 0.08);
+  }
+
+  .fluent-input {
+    @apply h-9 w-full rounded-md border border-slate-300/80 bg-white/90 px-3 text-sm text-slate-950 outline-none transition;
+  }
+
+  .fluent-input:focus {
+    @apply border-sky-500 ring-2 ring-sky-500/20;
+  }
+
+  .fluent-check {
+    @apply h-4 w-4 rounded border-slate-300 text-sky-600 accent-sky-600;
+  }
+
+  .fluent-segment {
+    @apply inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-100/80 p-1;
+  }
+
+  .fluent-segment-button {
+    @apply inline-flex h-8 min-w-8 items-center justify-center rounded-md px-2 text-sm text-slate-600 transition hover:bg-white/80 hover:text-slate-950;
+  }
+
+  .fluent-segment-button-active {
+    @apply bg-white text-slate-950 shadow-sm;
+  }
+
+  .fluent-scrollbar {
+    scrollbar-color: rgba(100, 116, 139, 0.45) transparent;
+    scrollbar-width: thin;
+  }
+
+  .fluent-scrollbar::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  .fluent-scrollbar::-webkit-scrollbar-thumb {
+    background: rgba(100, 116, 139, 0.32);
+    border: 3px solid transparent;
+    border-radius: 999px;
+    background-clip: content-box;
+  }
+
+  .fluent-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
   }
 }

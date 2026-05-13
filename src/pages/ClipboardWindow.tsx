@@ -8,7 +8,7 @@ import { ClipboardListItem } from "@/components/clipboard/ClipboardListItem.tsx"
 import { Button } from "@/components/ui/button.tsx";
 import { Toaster } from "@/components/ui/sonner.tsx";
 import { ClipboardResponseModel } from "@/models/clipboardRecord.ts";
-import { updateAppConfig } from "@/api/appConfig";
+import { saveAppConfig } from "@/store/appConfigStore";
 import {
   copyItem,
   getClipboardRecordList,
@@ -18,7 +18,7 @@ import {
   removeItem,
 } from "@/service/clipboardRecordService.ts";
 import { RefreshCcw, X } from "lucide-react";
-import {operationWindow} from "@/api/window.ts";
+import { operationWindow } from "@/api/window.ts";
 
 function ClipboardWindow() {
   const PAGE_SIZE = 10;
@@ -180,7 +180,7 @@ function ClipboardWindow() {
           }
 
           lastWindowSizeRef.current = { width, height };
-          await updateAppConfig({
+          await saveAppConfig({
             clipboard_window_width: width,
             clipboard_window_height: height,
           });
@@ -230,31 +230,33 @@ function ClipboardWindow() {
   };
 
   return (
-    <main className="flex h-screen w-full flex-col overflow-hidden bg-background">
+    <main className="fluent-shell flex h-screen w-full flex-col overflow-hidden">
       <Toaster />
       <header
-        className="flex h-11 items-center justify-between border-b px-3"
+        className="fluent-titlebar"
         data-tauri-drag-region
         onMouseDown={handleTitleBarMouseDown}
       >
-        <Button variant="ghost" size="sm" data-no-drag="true" onClick={() => void refreshRecords()}>
-          <RefreshCcw size={16} data-no-drag="true" onClick={() => void refreshRecords()}></RefreshCcw>
+        <Button variant="ghost" size="icon" className="h-8 w-8 rounded-md hover:bg-slate-200/70" data-no-drag="true" onClick={() => void refreshRecords()}>
+          <RefreshCcw size={16} data-no-drag="true" />
         </Button>
-        <h1 className="select-none text-sm font-medium" data-tauri-drag-region>
-          剪切板
-        </h1>
-        <Button variant="ghost" size="sm" data-no-drag="true" onClick={() => operationWindow("hide", 'index')}>
-          <X />
+        <div className="select-none text-center" data-tauri-drag-region>
+          <h1 className="text-sm font-semibold text-slate-950">剪切板</h1>
+          <p className="text-[11px] text-slate-500">{data.length} 条记录</p>
+        </div>
+        <Button variant="ghost" size="icon" className="h-8 w-8 rounded-md hover:bg-red-50 hover:text-red-600" data-no-drag="true" onClick={() => operationWindow("hide", "index")}>
+          <X size={16} />
         </Button>
       </header>
 
       <div
-        className="flex-1 overflow-y-auto p-3 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
+        className="fluent-scrollbar flex-1 overflow-y-auto p-3"
         ref={scrollRef}
         onScroll={handleListScroll}
-        style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}
       >
         <div className="space-y-2">
+          {loading && data.length === 0 ? <p className="rounded-lg border border-white/70 bg-white/70 px-3 py-2 text-sm text-slate-500">加载中...</p> : null}
+          {!loading && data.length === 0 ? <p className="rounded-lg border border-white/70 bg-white/70 px-3 py-2 text-sm text-slate-500">暂无剪贴板记录</p> : null}
           {data.map((item) => (
             <ClipboardListItem
               key={item.id}

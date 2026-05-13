@@ -13,7 +13,7 @@ export type AppConfig = {
   default_share_file: boolean;
   default_share_folder: boolean;
   unshare_on_clipboard_change: boolean;
-  enable_share_server: boolean;
+  auto_start_share_server: boolean;
   share_server_bind_ip: string;
   share_server_port: number;
   share_server_password_enabled: boolean;

@@ -6,18 +6,37 @@ use serde::{Deserialize, Serialize};
 use std::process::Command;
 use tauri::Manager;
 
+use crate::db::service::local_files::{
+    parse_source_clipboard_ids, source_type_after_adding_direct, source_type_after_removing_direct,
+    SHARE_MODE_MANUAL, SHARE_MODE_TEMP, SOURCE_DIRECT,
+};
 use crate::entity::clipboard_record;
+use crate::entity::inbound_connections;
 use crate::entity::local_files;
 use crate::entity::outbound_connections;
 use crate::error::{ApiError, AppError};
 use crate::models::clipboard::ClipboardType;
-use crate::utils::format::normalize_file_uri;
+use crate::utils::format::{generate_image_thumbnail, normalize_file_uri};
 
 #[derive(Debug, Serialize)]
 pub struct RemoteShareUser {
     pub user_id: String,
     pub user_name: String,
     pub ip: String,
+    pub password: Option<String>,
+    pub device_id: Option<String>,
+    pub auth_status: i32,
+    pub last_connected_at: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct InboundConnectionRequest {
+    pub user_id: String,
+    pub user_name: Option<String>,
+    pub ip: String,
+    pub device_id: Option<String>,
+    pub auth_status: i32,
+    pub last_seen_at: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -45,6 +64,19 @@ pub struct AddManualSharedPathsPayload {
     pub paths: Vec<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct UpdateRemoteAuthStatusPayload {
+    pub user_id: String,
+    pub auth_status: i32,
+    pub auth_token: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct InboundAuthDecisionPayload {
+    pub user_id: String,
+    pub auth_status: i32,
+}
+
 #[tauri::command]
 pub async fn list_remote_share_users(
     app: tauri::AppHandle,
@@ -60,6 +92,10 @@ pub async fn list_remote_share_users(
             user_id: row.user_id,
             user_name: row.user_name,
             ip: row.ip,
+            password: row.password,
+            device_id: row.device_id,
+            auth_status: row.auth_status,
+            last_connected_at: row.last_connected_at,
         })
         .collect())
 }
@@ -100,39 +136,158 @@ pub async fn upsert_remote_share_user(
     let user_id = payload.user_id.trim().to_string();
     let user_name = payload.user_name.trim().to_string();
     let ip = payload.ip.trim().to_string();
+    let password = payload
+        .password
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
     if user_id.is_empty() || user_name.is_empty() || ip.is_empty() {
         return Err(AppError::InvalidInput("user_id/user_name/ip 不能为空".to_string()).into());
     }
 
-    if let Some(existing) = outbound_connections::Entity::find_by_id(user_id.clone())
+    let updated = if let Some(existing) = outbound_connections::Entity::find_by_id(user_id.clone())
         .one(db)
         .await
         .map_err(AppError::from)?
     {
+        let auth_changed = existing.ip != ip || existing.password != password;
+        let device_id = existing
+            .device_id
+            .clone()
+            .or_else(|| Some(uuid::Uuid::new_v4().to_string()));
         let mut am: outbound_connections::ActiveModel = existing.into();
         am.user_name = Set(user_name.clone());
         am.ip = Set(ip.clone());
-        am.password = Set(payload.password);
-        am.update(db).await.map_err(AppError::from)?;
+        am.password = Set(password.clone());
+        am.device_id = Set(device_id);
+        if auth_changed {
+            am.auth_status = Set(0);
+            am.auth_token = Set(None);
+            am.last_connected_at = Set(None);
+        }
+        am.update(db).await.map_err(AppError::from)?
     } else {
         let am = outbound_connections::ActiveModel {
             user_id: Set(user_id.clone()),
             user_name: Set(user_name.clone()),
             ip: Set(ip.clone()),
-            password: Set(payload.password),
-            device_id: Set(None),
+            password: Set(password.clone()),
+            device_id: Set(Some(uuid::Uuid::new_v4().to_string())),
             display_name: Set(None),
             auth_token: Set(None),
             auth_status: Set(0),
             last_connected_at: Set(None),
         };
-        am.insert(db).await.map_err(AppError::from)?;
-    }
+        am.insert(db).await.map_err(AppError::from)?
+    };
 
     Ok(RemoteShareUser {
-        user_id,
-        user_name,
-        ip,
+        user_id: updated.user_id,
+        user_name: updated.user_name,
+        ip: updated.ip,
+        password: updated.password,
+        device_id: updated.device_id,
+        auth_status: updated.auth_status,
+        last_connected_at: updated.last_connected_at,
+    })
+}
+
+#[tauri::command]
+pub async fn update_remote_share_user_auth_status(
+    app: tauri::AppHandle,
+    payload: UpdateRemoteAuthStatusPayload,
+) -> Result<RemoteShareUser, ApiError> {
+    let db = &app.state::<crate::db::DbState>().conn;
+    let user_id = payload.user_id.trim().to_string();
+    if user_id.is_empty() {
+        return Err(AppError::InvalidInput("user_id 不能为空".to_string()).into());
+    }
+    if !(0..=4).contains(&payload.auth_status) {
+        return Err(AppError::InvalidInput("无效的认证状态".to_string()).into());
+    }
+
+    let row = outbound_connections::Entity::find_by_id(user_id)
+        .one(db)
+        .await
+        .map_err(AppError::from)?
+        .ok_or(AppError::NotFound)?;
+    let mut am: outbound_connections::ActiveModel = row.into();
+    am.auth_status = Set(payload.auth_status);
+    am.auth_token = Set(payload.auth_token);
+    if payload.auth_status == 2 {
+        am.last_connected_at = Set(Some(chrono::Utc::now().timestamp()));
+    }
+    let updated = am.update(db).await.map_err(AppError::from)?;
+    Ok(RemoteShareUser {
+        user_id: updated.user_id,
+        user_name: updated.user_name,
+        ip: updated.ip,
+        password: updated.password,
+        device_id: updated.device_id,
+        auth_status: updated.auth_status,
+        last_connected_at: updated.last_connected_at,
+    })
+}
+
+#[tauri::command]
+pub async fn list_inbound_connection_requests(
+    app: tauri::AppHandle,
+) -> Result<Vec<InboundConnectionRequest>, ApiError> {
+    let db = &app.state::<crate::db::DbState>().conn;
+    let rows = inbound_connections::Entity::find()
+        .filter(inbound_connections::Column::AuthStatus.eq(1))
+        .order_by_desc(inbound_connections::Column::LastSeenAt)
+        .all(db)
+        .await
+        .map_err(AppError::from)?;
+    Ok(rows
+        .into_iter()
+        .map(|row| InboundConnectionRequest {
+            user_id: row.user_id,
+            user_name: row.user_name,
+            ip: row.ip,
+            device_id: row.device_id,
+            auth_status: row.auth_status,
+            last_seen_at: row.last_seen_at,
+        })
+        .collect())
+}
+
+#[tauri::command]
+pub async fn set_inbound_connection_auth_status(
+    app: tauri::AppHandle,
+    payload: InboundAuthDecisionPayload,
+) -> Result<InboundConnectionRequest, ApiError> {
+    let db = &app.state::<crate::db::DbState>().conn;
+    if payload.auth_status != 2 && payload.auth_status != 3 {
+        return Err(AppError::InvalidInput("只能同意或拒绝连接请求".to_string()).into());
+    }
+
+    let row = inbound_connections::Entity::find_by_id(payload.user_id)
+        .one(db)
+        .await
+        .map_err(AppError::from)?
+        .ok_or(AppError::NotFound)?;
+    let now = chrono::Utc::now().timestamp();
+    let mut am: inbound_connections::ActiveModel = row.into();
+    am.auth_status = Set(payload.auth_status);
+    if payload.auth_status == 2 {
+        am.is_shared = Set(1);
+        am.is_trusted = Set(1);
+        am.granted_at = Set(Some(now));
+        am.revoked_at = Set(None);
+    } else {
+        am.is_shared = Set(0);
+        am.is_trusted = Set(0);
+        am.revoked_at = Set(Some(now));
+    }
+    let updated = am.update(db).await.map_err(AppError::from)?;
+    Ok(InboundConnectionRequest {
+        user_id: updated.user_id,
+        user_name: updated.user_name,
+        ip: updated.ip,
+        device_id: updated.device_id,
+        auth_status: updated.auth_status,
+        last_seen_at: updated.last_seen_at,
     })
 }
 
@@ -208,6 +363,32 @@ pub async fn reveal_local_shared_file(app: tauri::AppHandle, id: String) -> Resu
 }
 
 #[tauri::command]
+pub async fn get_local_shared_file_thumbnail(
+    app: tauri::AppHandle,
+    id: String,
+) -> Result<String, ApiError> {
+    let db = &app.state::<crate::db::DbState>().conn;
+    let row = local_files::Entity::find_by_id(id)
+        .one(db)
+        .await
+        .map_err(AppError::from)?
+        .ok_or(AppError::NotFound)?;
+    if row.is_valid != 1 || row.r#type != 2 {
+        return Err(AppError::InvalidInput("该共享项不是有效图片".to_string()).into());
+    }
+
+    let target = std::path::PathBuf::from(row.path);
+    if !target.is_file() {
+        return Err(AppError::InvalidInput("目标图片不存在".to_string()).into());
+    }
+
+    let image_data = std::fs::read(&target).map_err(AppError::from)?;
+    let thumbnail = generate_image_thumbnail(&image_data, 48)
+        .map_err(|e| AppError::InvalidInput(format!("生成缩略图失败: {e}")))?;
+    Ok(format!("data:image/jpeg;base64,{thumbnail}"))
+}
+
+#[tauri::command]
 pub async fn unshare_local_shared_file(app: tauri::AppHandle, id: String) -> Result<(), ApiError> {
     let db = &app.state::<crate::db::DbState>().conn;
     let row = local_files::Entity::find_by_id(id.clone())
@@ -215,9 +396,21 @@ pub async fn unshare_local_shared_file(app: tauri::AppHandle, id: String) -> Res
         .await
         .map_err(AppError::from)?
         .ok_or(AppError::NotFound)?;
-    let mut am: local_files::ActiveModel = row.into();
-    am.is_valid = Set(0);
-    am.source_clipboard_id = Set(None);
+    let mut am: local_files::ActiveModel = row.clone().into();
+    if let Some(next_source_type) = source_type_after_removing_direct(row.source_type) {
+        let ids = parse_source_clipboard_ids(row.source_clipboard_id.as_deref());
+        if ids.is_empty() {
+            am.is_valid = Set(0);
+            am.source_clipboard_id = Set(None);
+        } else {
+            am.source_type = Set(next_source_type);
+            am.share_mode = Set(SHARE_MODE_TEMP);
+        }
+    } else {
+        am.is_valid = Set(0);
+        am.source_clipboard_id = Set(None);
+    }
+    am.updated_at = Set(Some(chrono::Utc::now().timestamp()));
     am.update(db).await.map_err(AppError::from)?;
     crate::app::events::emit_local_files_changed(&app, vec![id], "local_file_unshared");
     Ok(())
@@ -272,13 +465,18 @@ pub async fn add_manual_shared_paths(
             .map_err(AppError::from)?;
         if let Some(existing) = existed {
             let existing_id = existing.id.clone();
+            let source_type = source_type_after_adding_direct(existing.source_type);
+            let clipboard_ids = parse_source_clipboard_ids(existing.source_clipboard_id.as_deref());
             let mut am: local_files::ActiveModel = existing.into();
             am.is_valid = Set(1);
-            am.source_type = Set(0);
-            am.source_clipboard_id = Set(None);
+            am.source_type = Set(source_type);
+            if clipboard_ids.is_empty() {
+                am.source_clipboard_id = Set(None);
+            }
             am.size = Set(size);
             am.r#type = Set(file_type);
-            am.share_mode = Set(0);
+            am.share_mode = Set(SHARE_MODE_MANUAL);
+            am.expires_at = Set(None);
             am.updated_at = Set(Some(chrono::Utc::now().timestamp()));
             am.update(db).await.map_err(AppError::from)?;
             changed_ids.push(existing_id);
@@ -294,9 +492,9 @@ pub async fn add_manual_shared_paths(
                 is_valid: Set(1),
                 size: Set(size),
                 source_clipboard_id: Set(None),
-                source_type: Set(0),
+                source_type: Set(SOURCE_DIRECT),
                 is_favorite: Set(0),
-                share_mode: Set(0),
+                share_mode: Set(SHARE_MODE_MANUAL),
                 expires_at: Set(None),
                 updated_at: Set(Some(now)),
             };

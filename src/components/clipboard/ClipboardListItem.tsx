@@ -15,6 +15,7 @@ import {
   HardDrive,
   Folder,
   Files,
+  CheckCircle2,
 } from 'lucide-react';
 
 import { ClipboardResponseModel, ClipboardType } from '@/models/clipboardRecord.ts';
@@ -136,28 +137,28 @@ export const ClipboardListItem: React.FC<ClipboardListItemProps> = ({
                 <div
                   key={file.path}
                   className={cn(
-                    'rounded-md border bg-background/70 px-2 py-1.5',
+                    'rounded-md border border-slate-200 bg-white/80 px-2 py-1.5',
                     !file.exists && 'opacity-60',
                   )}
                   title={displayPath}
                 >
                   <div className="flex min-w-0 items-center gap-2">
-                    <Icon size={14} className={file.isDir ? 'text-sky-500' : file.type === 2 ? 'text-violet-500' : 'text-muted-foreground'} />
-                    <span className="min-w-0 flex-1 truncate text-xs font-medium">{file.name}</span>
-                    <span className="shrink-0 text-[11px] text-muted-foreground">{file.exists ? formatSizeLabel(file.size) : '已失效'}</span>
+                    <Icon size={14} className={file.isDir ? 'text-sky-500' : file.type === 2 ? 'text-violet-500' : 'text-slate-500'} />
+                    <span className="min-w-0 flex-1 truncate text-xs font-medium text-slate-800">{file.name}</span>
+                    <span className="shrink-0 text-[11px] text-slate-500">{file.exists ? formatSizeLabel(file.size) : '已失效'}</span>
                   </div>
-                  <div className="mt-1 truncate pl-5 text-[11px] text-muted-foreground">{displayPath}</div>
+                  <div className="mt-1 truncate pl-5 text-[11px] text-slate-500">{displayPath}</div>
                 </div>
               );
             })}
-            {hiddenCount > 0 && <div className="text-[11px] text-muted-foreground">还有 {hiddenCount} 项未显示</div>}
+            {hiddenCount > 0 && <div className="text-[11px] text-slate-500">还有 {hiddenCount} 项未显示</div>}
           </div>
         </div>
       );
     }
 
     if (!preview) {
-      return <span className="text-muted-foreground italic">无预览</span>;
+      return <span className="italic text-slate-500">无预览</span>;
     }
 
     if (type === ClipboardType.Image) {
@@ -165,7 +166,7 @@ export const ClipboardListItem: React.FC<ClipboardListItemProps> = ({
           <img
               src={`data:image/jpeg;base64,${preview}`}
               alt="预览"
-              className="h-12 w-auto rounded object-cover bg-muted"
+              className="h-12 w-auto rounded-md bg-slate-100 object-cover"
           />
       );
     }
@@ -202,8 +203,8 @@ export const ClipboardListItem: React.FC<ClipboardListItemProps> = ({
       <TooltipProvider delayDuration={300}>
         <Card
             className={cn(
-                `cursor-pointer transition-colors hover:bg-accent/5`,
-                !isValid && 'opacity-60 bg-muted/20 cursor-not-allowed', // 失效样式
+                'fluent-card cursor-pointer overflow-hidden',
+                !isValid && 'opacity-60 cursor-not-allowed',
                 className
             )}
             onClick={() => isValid && onClick?.(id)}
@@ -214,14 +215,14 @@ export const ClipboardListItem: React.FC<ClipboardListItemProps> = ({
               {/* 上部：类型图标 + 元信息 + 操作按钮 */}
               <div className="flex items-start gap-2">
                 {/* 左侧类型图标 */}
-                <div className="mt-0.5 text-muted-foreground">
+                <div className="mt-0.5 rounded-md bg-slate-100 p-1.5 text-slate-600">
                   <TypeIcon size={14} />
                 </div>
 
                 {/* 元信息区域（自动换行，占据剩余空间） */}
                 <div className="flex-1 min-w-0">
-                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-                    <span>{typeName}</span>
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500">
+                    <span className="font-medium text-slate-700">{typeName}</span>
                     {sourceApp && (
                         <Badge variant="outline" className="text-xs">
                           {sourceApp}
@@ -234,7 +235,8 @@ export const ClipboardListItem: React.FC<ClipboardListItemProps> = ({
                         </div>
                     )}
                     {(type === ClipboardType.File || type === ClipboardType.Folder) && fileItems?.length ? (
-                        <Badge variant="outline" className="text-xs">
+                        <Badge variant="outline" className="gap-1 border-slate-200 bg-white/70 text-xs text-slate-600">
+                          {isShared ? <CheckCircle2 size={11} className="text-emerald-600" /> : null}
                           {fileItems.length} 项{isShared ? ' / 已共享' : ''}
                         </Badge>
                     ) : null}
@@ -266,7 +268,7 @@ export const ClipboardListItem: React.FC<ClipboardListItemProps> = ({
                       <Button
                           variant="ghost"
                           size="icon"
-                          className="h-6 w-6"
+                          className="h-7 w-7 rounded-md hover:bg-slate-100"
                           onClick={handleFavorite}
                           aria-label={isFavorite ? '取消收藏' : '收藏'}
                           disabled={!isValid} // 可选：失效时禁用收藏
@@ -284,7 +286,7 @@ export const ClipboardListItem: React.FC<ClipboardListItemProps> = ({
                       <Button
                           variant="ghost"
                           size="icon"
-                          className="h-6 w-6"
+                          className="h-7 w-7 rounded-md hover:bg-slate-100"
                           onClick={handleShare}
                           aria-label={isShared ? '取消分享' : '分享'}
                           disabled={!isValid} // 可选：失效时禁用收藏
@@ -299,7 +301,7 @@ export const ClipboardListItem: React.FC<ClipboardListItemProps> = ({
 
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
-                      <Button variant="ghost" size="icon" className="h-6 w-6">
+                      <Button variant="ghost" size="icon" className="h-7 w-7 rounded-md hover:bg-slate-100">
                         <MoreHorizontal size={14} />
                       </Button>
                     </DropdownMenuTrigger>
@@ -334,10 +336,10 @@ export const ClipboardListItem: React.FC<ClipboardListItemProps> = ({
               </div>
 
               {/* 下部：预览内容 */}
-              <div className="relative rounded-md bg-muted/30 p-2 text-base text-foreground/90 overflow-hidden">
+              <div className="relative overflow-hidden rounded-md border border-slate-100 bg-slate-50/70 p-2 text-base text-slate-900">
                 {!isValid && (
-                    <div className="absolute inset-0 flex items-center justify-center bg-background/50 backdrop-blur-[1px] z-10">
-                      <span className="text-xs text-muted-foreground bg-background/80 px-2 py-0.5 rounded">已失效</span>
+                    <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/55 backdrop-blur-[1px]">
+                      <span className="rounded bg-white/90 px-2 py-0.5 text-xs text-slate-500">已失效</span>
                     </div>
                 )}
                 {renderPreview()}

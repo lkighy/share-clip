@@ -6,16 +6,24 @@ use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::header;
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
-use sea_orm::{ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect};
+use sea_orm::{
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter,
+    QueryOrder, QuerySelect,
+};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio_util::io::ReaderStream;
 
 use super::{json_error, HttpState};
-use crate::entity::{local_file_index, local_files};
+use crate::entity::{inbound_connections, local_file_index, local_files};
 use crate::server::share::{resolve_share_path, ROOT_RELATIVE_PATH};
+
+const AUTH_STATUS_UNAUTHENTICATED: i32 = 0;
+const AUTH_STATUS_PENDING: i32 = 1;
+const AUTH_STATUS_APPROVED: i32 = 2;
+const AUTH_STATUS_REJECTED: i32 = 3;
 
 #[derive(Deserialize)]
 struct RelativePathQuery {
@@ -36,6 +44,21 @@ struct RemoteShareItem {
     r#type: i32,
     size: Option<i64>,
     updated_at: Option<i64>,
+}
+
+#[derive(Serialize)]
+struct FileNode {
+    name: String,
+    relative_path: String,
+    is_dir: bool,
+    size: Option<u64>,
+}
+
+#[derive(Serialize)]
+struct FileListResponse {
+    share_id: String,
+    current_path: String,
+    items: Vec<FileNode>,
 }
 
 #[derive(Serialize)]
@@ -65,6 +88,23 @@ struct ClientFileMeta {
     hash: Option<String>,
 }
 
+#[derive(Deserialize)]
+struct ConnectionRequest {
+    user_id: String,
+    user_name: Option<String>,
+    device_id: Option<String>,
+    password: Option<String>,
+    ip: Option<String>,
+}
+
+#[derive(Serialize)]
+struct ConnectionStatusResponse {
+    auth_status: i32,
+    message: String,
+    poll_after_ms: u64,
+    auth_token: Option<String>,
+}
+
 #[derive(Serialize)]
 struct DiffResponse {
     page: u64,
@@ -77,9 +117,18 @@ struct DiffResponse {
 
 pub fn router() -> Router<HttpState> {
     Router::new()
+        .route("/api/client/connect/request", post(request_connection))
+        .route(
+            "/api/client/connect/status/{user_id}",
+            get(connection_status),
+        )
         .route("/api/client/shares", get(list_client_shares))
+        .route("/api/client/shares/{id}/list", get(list_client_files))
         .route("/api/client/shares/{id}/index", get(index_share))
-        .route("/api/client/shares/{id}/download", get(download_share_file))
+        .route(
+            "/api/client/shares/{id}/download",
+            get(download_client_share_file),
+        )
         .route(
             "/api/client/shares/{id}/diff",
             axum::routing::post(diff_share),
@@ -87,7 +136,153 @@ pub fn router() -> Router<HttpState> {
         .route("/api/files/{id}/download", get(download_share_file))
 }
 
-async fn list_client_shares(State(state): State<HttpState>) -> Response {
+async fn request_connection(State(state): State<HttpState>, body: String) -> Response {
+    let payload = match serde_json::from_str::<ConnectionRequest>(&body) {
+        Ok(payload) => payload,
+        Err(e) => return json_error(StatusCode::BAD_REQUEST, format!("invalid request: {e}")),
+    };
+    let user_id = payload.user_id.trim().to_string();
+    if user_id.is_empty() {
+        return json_error(StatusCode::BAD_REQUEST, "user_id is required");
+    }
+
+    let config = crate::app::config::load_or_create_config();
+    if config.share_server_password_enabled {
+        let expected = config
+            .share_server_password_hash
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty());
+        let supplied = payload.password.as_deref().map(str::trim).unwrap_or("");
+        if expected.is_none() || Some(supplied) != expected {
+            return json_error(StatusCode::UNAUTHORIZED, "password required or invalid");
+        }
+    }
+
+    let now = chrono::Utc::now().timestamp();
+    let existing = match inbound_connections::Entity::find_by_id(user_id.clone())
+        .one(&state.db)
+        .await
+    {
+        Ok(row) => row,
+        Err(e) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("database error: {e}"),
+            )
+        }
+    };
+
+    let auth_status = match existing.as_ref().map(|row| row.auth_status) {
+        Some(AUTH_STATUS_APPROVED) => AUTH_STATUS_APPROVED,
+        Some(AUTH_STATUS_REJECTED) => AUTH_STATUS_REJECTED,
+        _ if config.share_server_auth_mode == 0 => AUTH_STATUS_APPROVED,
+        _ => AUTH_STATUS_PENDING,
+    };
+
+    let user_name = payload
+        .user_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(ToOwned::to_owned);
+    let device_id = payload
+        .device_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(ToOwned::to_owned);
+    let ip = payload
+        .ip
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .unwrap_or("unknown")
+        .to_string();
+
+    if let Some(existing) = existing {
+        let mut am: inbound_connections::ActiveModel = existing.into();
+        am.ip = Set(ip);
+        am.device_id = Set(device_id);
+        am.user_name = Set(user_name);
+        am.auth_status = Set(auth_status);
+        am.last_seen_at = Set(Some(now));
+        if auth_status == AUTH_STATUS_APPROVED {
+            am.is_shared = Set(1);
+            am.is_trusted = Set(1);
+            am.granted_at = Set(Some(now));
+            am.revoked_at = Set(None);
+        }
+        if let Err(e) = am.update(&state.db).await {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("database error: {e}"),
+            );
+        }
+    } else {
+        let am = inbound_connections::ActiveModel {
+            user_id: Set(user_id),
+            is_shared: Set(if auth_status == AUTH_STATUS_APPROVED {
+                1
+            } else {
+                0
+            }),
+            is_trusted: Set(if auth_status == AUTH_STATUS_APPROVED {
+                1
+            } else {
+                0
+            }),
+            ip: Set(ip),
+            device_id: Set(device_id),
+            user_name: Set(user_name),
+            auth_status: Set(auth_status),
+            granted_at: Set(if auth_status == AUTH_STATUS_APPROVED {
+                Some(now)
+            } else {
+                None
+            }),
+            revoked_at: Set(None),
+            last_seen_at: Set(Some(now)),
+        };
+        if let Err(e) = am.insert(&state.db).await {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("database error: {e}"),
+            );
+        }
+    }
+
+    Json(connection_status_body(auth_status)).into_response()
+}
+
+async fn connection_status(
+    State(state): State<HttpState>,
+    AxumPath(user_id): AxumPath<String>,
+) -> Response {
+    let row = match inbound_connections::Entity::find_by_id(user_id)
+        .one(&state.db)
+        .await
+    {
+        Ok(row) => row,
+        Err(e) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("database error: {e}"),
+            )
+        }
+    };
+    Json(connection_status_body(
+        row.map(|row| row.auth_status)
+            .unwrap_or(AUTH_STATUS_UNAUTHENTICATED),
+    ))
+    .into_response()
+}
+
+async fn list_client_shares(State(state): State<HttpState>, headers: HeaderMap) -> Response {
+    if let Err(response) = authorize_client_request(&state, &headers).await {
+        return response;
+    }
+
     let rows = match local_files::Entity::find()
         .filter(local_files::Column::IsValid.eq(1))
         .order_by_desc(local_files::Column::UpdatedAt)
@@ -107,11 +302,85 @@ async fn list_client_shares(State(state): State<HttpState>) -> Response {
     Json(rows.into_iter().map(remote_share_item).collect::<Vec<_>>()).into_response()
 }
 
+async fn list_client_files(
+    State(state): State<HttpState>,
+    AxumPath(id): AxumPath<String>,
+    Query(query): Query<RelativePathQuery>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(response) = authorize_client_request(&state, &headers).await {
+        return response;
+    }
+
+    let share = match crate::server::share::load_local_share(&state.db, &id).await {
+        Ok(share) => share,
+        Err(_) => return json_error(StatusCode::NOT_FOUND, "share not found"),
+    };
+    let root = PathBuf::from(&share.path);
+    let target = match resolve_share_path(&root, query.path.as_deref()) {
+        Ok(target) => target,
+        Err(e) if e.contains("outside") || e.contains("absolute") || e.contains("invalid") => {
+            return json_error(StatusCode::FORBIDDEN, e)
+        }
+        Err(e) => return json_error(StatusCode::NOT_FOUND, e),
+    };
+    let root = match std::fs::canonicalize(root) {
+        Ok(root) => root,
+        Err(_) => return json_error(StatusCode::NOT_FOUND, "share root not found"),
+    };
+
+    if target.is_file() {
+        return Json(FileListResponse {
+            share_id: id,
+            current_path: crate::server::share::relative_path_for(&root, &target),
+            items: vec![path_to_node(&root, &target)],
+        })
+        .into_response();
+    }
+
+    let read_dir = match std::fs::read_dir(&target) {
+        Ok(entries) => entries,
+        Err(e) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("failed to read directory: {e}"),
+            )
+        }
+    };
+
+    let mut items = Vec::new();
+    for entry in read_dir.flatten() {
+        if let Ok(path) = std::fs::canonicalize(entry.path()) {
+            if path.starts_with(&root) {
+                items.push(path_to_node(&root, &path));
+            }
+        }
+    }
+    items.sort_by(|a, b| {
+        a.is_dir
+            .cmp(&b.is_dir)
+            .reverse()
+            .then_with(|| a.name.cmp(&b.name))
+    });
+
+    Json(FileListResponse {
+        share_id: id,
+        current_path: crate::server::share::relative_path_for(&root, &target),
+        items,
+    })
+    .into_response()
+}
+
 async fn index_share(
     State(state): State<HttpState>,
     AxumPath(id): AxumPath<String>,
     Query(query): Query<IndexQuery>,
+    headers: HeaderMap,
 ) -> Response {
+    if let Err(response) = authorize_client_request(&state, &headers).await {
+        return response;
+    }
+
     if crate::server::share::load_local_share(&state.db, &id)
         .await
         .is_err()
@@ -159,8 +428,13 @@ async fn index_share(
 async fn diff_share(
     State(state): State<HttpState>,
     AxumPath(id): AxumPath<String>,
+    headers: HeaderMap,
     Json(payload): Json<DiffRequest>,
 ) -> Response {
+    if let Err(response) = authorize_client_request(&state, &headers).await {
+        return response;
+    }
+
     if crate::server::share::load_local_share(&state.db, &id)
         .await
         .is_err()
@@ -262,6 +536,27 @@ async fn download_share_file(
     State(state): State<HttpState>,
     AxumPath(id): AxumPath<String>,
     Query(query): Query<RelativePathQuery>,
+    headers: HeaderMap,
+) -> Response {
+    serve_share_file(state, id, query, headers).await
+}
+
+async fn download_client_share_file(
+    State(state): State<HttpState>,
+    AxumPath(id): AxumPath<String>,
+    Query(query): Query<RelativePathQuery>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(response) = authorize_client_request(&state, &headers).await {
+        return response;
+    }
+    serve_share_file(state, id, query, headers).await
+}
+
+async fn serve_share_file(
+    state: HttpState,
+    id: String,
+    query: RelativePathQuery,
     headers: HeaderMap,
 ) -> Response {
     let share = match crate::server::share::load_local_share(&state.db, &id).await {
@@ -391,6 +686,25 @@ fn index_item(row: local_file_index::Model) -> SyncIndexItem {
     }
 }
 
+fn path_to_node(root: &std::path::Path, path: &std::path::Path) -> FileNode {
+    let metadata = std::fs::metadata(path).ok();
+    let is_dir = metadata.as_ref().map(|m| m.is_dir()).unwrap_or(false);
+    let size = metadata
+        .as_ref()
+        .and_then(|m| if m.is_file() { Some(m.len()) } else { None });
+    let name = path
+        .file_name()
+        .map(|value| value.to_string_lossy().to_string())
+        .unwrap_or_else(|| path.to_string_lossy().to_string());
+
+    FileNode {
+        name,
+        relative_path: crate::server::share::relative_path_for(root, path),
+        is_dir,
+        size,
+    }
+}
+
 fn normalize_parent_filter(path: Option<&str>) -> Option<String> {
     path.map(str::trim)
         .filter(|v| !v.is_empty())
@@ -442,4 +756,56 @@ fn parse_range(range: Option<&str>, total_size: u64) -> Result<(u64, u64, bool),
         return Err(());
     }
     Ok((start, end, true))
+}
+
+async fn authorize_client_request(state: &HttpState, headers: &HeaderMap) -> Result<(), Response> {
+    let user_id = headers
+        .get("x-share-clip-user-id")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| json_error(StatusCode::UNAUTHORIZED, "missing user id"))?;
+    let device_id = headers
+        .get("x-share-clip-device-id")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| json_error(StatusCode::UNAUTHORIZED, "missing device id"))?;
+
+    let row = inbound_connections::Entity::find_by_id(user_id.to_string())
+        .one(&state.db)
+        .await
+        .map_err(|e| {
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("database error: {e}"),
+            )
+        })?
+        .ok_or_else(|| json_error(StatusCode::UNAUTHORIZED, "connection is not approved"))?;
+
+    if row.auth_status != AUTH_STATUS_APPROVED || row.is_shared != 1 {
+        return Err(json_error(
+            StatusCode::FORBIDDEN,
+            "connection is not approved",
+        ));
+    }
+    if row.device_id.as_deref() != Some(device_id) {
+        return Err(json_error(StatusCode::FORBIDDEN, "device is not trusted"));
+    }
+    Ok(())
+}
+
+fn connection_status_body(auth_status: i32) -> ConnectionStatusResponse {
+    let message = match auth_status {
+        AUTH_STATUS_PENDING => "waiting for approval",
+        AUTH_STATUS_APPROVED => "approved",
+        AUTH_STATUS_REJECTED => "rejected",
+        _ => "unauthenticated",
+    };
+    ConnectionStatusResponse {
+        auth_status,
+        message: message.to_string(),
+        poll_after_ms: 2000,
+        auth_token: None,
+    }
 }

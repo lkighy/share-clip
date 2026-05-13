@@ -5,6 +5,11 @@ use sea_orm::{ActiveModelTrait, ColumnTrait, DbErr, EntityTrait, ModelTrait, Que
 use uuid::Uuid;
 
 use crate::db::repository::clipboard_record;
+use crate::db::service::local_files::{
+    cleanup_orphaned_clipboard_local_files, has_clipboard_source, has_direct_source,
+    parse_source_clipboard_ids, source_type_after_adding_clipboard,
+    source_type_after_removing_clipboard, SHARE_MODE_MANUAL, SHARE_MODE_TEMP, SOURCE_CLIPBOARD,
+};
 use crate::db::DbState;
 use crate::entity::clipboard_record::{ActiveModel, Entity, Model};
 use crate::entity::local_files;
@@ -141,7 +146,7 @@ pub async fn get_and_validate_clipboard_record(
                 })?,
                 None => return handle_invalid_entry(db, record, auto_cleanup).await,
             };
-            let path = std::path::Path::new(&path_str);
+            let path = std::path::Path::new(normalize_file_uri(&path_str));
             if !path.exists() {
                 return handle_invalid_entry(db, record, auto_cleanup).await;
             }
@@ -339,13 +344,6 @@ fn is_image_path(path: &std::path::Path) -> bool {
     )
 }
 
-fn parse_source_clipboard_ids(raw: Option<&str>) -> Vec<i32> {
-    let Some(raw) = raw else {
-        return Vec::new();
-    };
-    serde_json::from_str::<Vec<i32>>(raw).unwrap_or_default()
-}
-
 async fn upsert_local_files_for_shared_clipboard(
     db: &DbState,
     record: &Model,
@@ -373,18 +371,28 @@ async fn upsert_local_files_for_shared_clipboard(
             .map_err(AppError::from)?;
 
         if let Some(existing) = existed {
+            let mut ids = parse_source_clipboard_ids(existing.source_clipboard_id.as_deref());
+            if !ids.contains(&record.id) {
+                ids.push(record.id);
+            }
+            let source_type = source_type_after_adding_clipboard(existing.source_type);
+            let share_mode = if has_direct_source(existing.source_type) {
+                SHARE_MODE_MANUAL
+            } else {
+                SHARE_MODE_TEMP
+            };
             let mut am: local_files::ActiveModel = existing.clone().into();
             am.is_valid = Set(1);
             am.size = Set(size);
-            if existing.source_type != 0 {
-                let mut ids = parse_source_clipboard_ids(existing.source_clipboard_id.as_deref());
-                if !ids.contains(&record.id) {
-                    ids.push(record.id);
-                }
-                am.source_clipboard_id =
-                    Set(Some(serde_json::to_string(&ids).map_err(AppError::from)?));
-                am.source_type = Set(1);
-            }
+            am.r#type = Set(local_file_type_from_clipboard_type(
+                record.r#type,
+                &canonical,
+            ));
+            am.source_clipboard_id =
+                Set(Some(serde_json::to_string(&ids).map_err(AppError::from)?));
+            am.source_type = Set(source_type);
+            am.share_mode = Set(share_mode);
+            am.updated_at = Set(Some(chrono::Utc::now().timestamp()));
             am.update(&db.conn).await.map_err(AppError::from)?;
         } else {
             let now = chrono::Utc::now().timestamp();
@@ -402,9 +410,9 @@ async fn upsert_local_files_for_shared_clipboard(
                 source_clipboard_id: Set(Some(
                     serde_json::to_string(&vec![record.id]).map_err(AppError::from)?,
                 )),
-                source_type: Set(1),
+                source_type: Set(SOURCE_CLIPBOARD),
                 is_favorite: Set(0),
-                share_mode: Set(1),
+                share_mode: Set(SHARE_MODE_TEMP),
                 expires_at: Set(None),
                 updated_at: Set(Some(now)),
             };
@@ -424,40 +432,83 @@ pub async fn sync_local_files_on_clipboard_unshared_or_invalid(
         let canonical = std::fs::canonicalize(&path).unwrap_or(path);
         let path_text = canonical.to_string_lossy().to_string();
 
-        let existed = local_files::Entity::find()
-            .filter(local_files::Column::Path.eq(path_text))
-            .one(&db.conn)
-            .await
-            .map_err(AppError::from)?;
+        let existed = find_local_file_for_clipboard_path(db, record.id, &path_text).await?;
 
         let Some(existing) = existed else {
             continue;
         };
-        if existing.source_type == 0 {
+        if !has_clipboard_source(existing.source_type) {
             continue;
         }
 
         let mut ids = parse_source_clipboard_ids(existing.source_clipboard_id.as_deref());
         ids.retain(|x| *x != record.id);
 
-        let mut am: local_files::ActiveModel = existing.into();
+        let mut am: local_files::ActiveModel = existing.clone().into();
         if ids.is_empty() {
             am.source_clipboard_id = Set(None);
-            am.is_valid = Set(0);
+            if let Some(next_source_type) =
+                source_type_after_removing_clipboard(existing.source_type)
+            {
+                am.source_type = Set(next_source_type);
+                am.share_mode = Set(SHARE_MODE_MANUAL);
+                am.is_valid = Set(1);
+            } else {
+                am.is_valid = Set(0);
+            }
         } else {
             am.source_clipboard_id =
                 Set(Some(serde_json::to_string(&ids).map_err(AppError::from)?));
             am.is_valid = Set(1);
         }
+        am.updated_at = Set(Some(chrono::Utc::now().timestamp()));
         am.update(&db.conn).await.map_err(AppError::from)?;
     }
+    cleanup_orphaned_clipboard_local_files(&db.conn).await?;
     Ok(())
+}
+
+async fn find_local_file_for_clipboard_path(
+    db: &DbState,
+    clipboard_id: i32,
+    path_text: &str,
+) -> Result<Option<local_files::Model>, AppError> {
+    if let Some(exact) = local_files::Entity::find()
+        .filter(local_files::Column::Path.eq(path_text.to_string()))
+        .one(&db.conn)
+        .await
+        .map_err(AppError::from)?
+    {
+        return Ok(Some(exact));
+    }
+
+    let candidates = local_files::Entity::find()
+        .filter(local_files::Column::SourceClipboardId.is_not_null())
+        .all(&db.conn)
+        .await
+        .map_err(AppError::from)?;
+
+    Ok(candidates.into_iter().find(|candidate| {
+        if !has_clipboard_source(candidate.source_type) {
+            return false;
+        }
+        let ids = parse_source_clipboard_ids(candidate.source_clipboard_id.as_deref());
+        ids.contains(&clipboard_id) && path_text_matches(&candidate.path, path_text)
+    }))
 }
 
 pub async fn invalidate_shared_clipboards_by_fs_change(
     db: &DbState,
     changed_path: &std::path::Path,
 ) -> Result<(), AppError> {
+    let normalized_changed_path = changed_path
+        .to_str()
+        .map(|path| std::path::PathBuf::from(normalize_file_uri(path)))
+        .unwrap_or_else(|| changed_path.to_path_buf());
+    let changed_path_text = changed_path.to_string_lossy().to_string();
+    let normalized_changed_path_text = normalized_changed_path.to_string_lossy().to_string();
+    let changed_candidates = [changed_path.to_path_buf(), normalized_changed_path];
+
     let records = Entity::find()
         .filter(crate::entity::clipboard_record::Column::IsShared.eq(1))
         .filter(crate::entity::clipboard_record::Column::IsValid.eq(1))
@@ -476,9 +527,13 @@ pub async fn invalidate_shared_clipboards_by_fs_change(
         for raw in &paths {
             let p = std::path::PathBuf::from(normalize_file_uri(raw));
             let canonical = std::fs::canonicalize(&p).unwrap_or(p);
-            if canonical == changed_path
-                || changed_path.starts_with(&canonical)
-                || canonical.starts_with(changed_path)
+            let canonical_text = canonical.to_string_lossy().to_string();
+            if changed_candidates.iter().any(|candidate| {
+                canonical == *candidate
+                    || candidate.starts_with(&canonical)
+                    || canonical.starts_with(candidate)
+            }) || path_text_matches(&canonical_text, &changed_path_text)
+                || path_text_matches(&canonical_text, &normalized_changed_path_text)
             {
                 should_check = true;
                 break;
@@ -509,4 +564,22 @@ pub async fn invalidate_shared_clipboards_by_fs_change(
     }
 
     Ok(())
+}
+
+fn path_text_matches(path: &str, changed_path: &str) -> bool {
+    let path = normalize_for_path_compare(path);
+    let changed_path = normalize_for_path_compare(changed_path);
+    path == changed_path
+        || changed_path.starts_with(&format!("{path}\\"))
+        || path.starts_with(&format!("{changed_path}\\"))
+}
+
+fn normalize_for_path_compare(path: &str) -> String {
+    let mut path = normalize_file_uri(path).replace('/', "\\");
+    if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
+        path = format!(r"\\{rest}");
+    } else if let Some(rest) = path.strip_prefix(r"\\?\") {
+        path = rest.to_string();
+    }
+    path.trim_end_matches('\\').to_ascii_lowercase()
 }

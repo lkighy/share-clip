@@ -1,4 +1,5 @@
 import type { MouseEvent } from "react";
+import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { toast } from "sonner";
@@ -28,7 +29,7 @@ type AppConfigForm = {
   default_share_file: boolean;
   default_share_folder: boolean;
   unshare_on_clipboard_change: boolean;
-  enable_share_server: boolean;
+  auto_start_share_server: boolean;
   share_server_bind_ip: string;
   share_server_port: string;
   share_server_password_enabled: boolean;
@@ -37,6 +38,26 @@ type AppConfigForm = {
   browser_access_enabled: boolean;
   sync_access_enabled: boolean;
 };
+
+function SettingsSection({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="fluent-panel overflow-hidden">
+      <div className="border-b border-slate-200/70 px-4 py-3">
+        <h2 className="text-sm font-semibold text-slate-950">{title}</h2>
+      </div>
+      <div className="divide-y divide-slate-200/70">{children}</div>
+    </section>
+  );
+}
+
+function SettingsRow({ label, children, wide = false }: { label: string; children: ReactNode; wide?: boolean }) {
+  return (
+    <label className={`grid gap-2 px-4 py-3 text-sm ${wide ? "sm:grid-cols-[1fr_2fr]" : "sm:grid-cols-[1fr_220px]"} sm:items-center`}>
+      <span className="font-medium text-slate-700">{label}</span>
+      <div className="min-w-0">{children}</div>
+    </label>
+  );
+}
 
 const emptyForm: AppConfigForm = {
   shortcut: "",
@@ -53,7 +74,7 @@ const emptyForm: AppConfigForm = {
   default_share_file: false,
   default_share_folder: false,
   unshare_on_clipboard_change: true,
-  enable_share_server: false,
+  auto_start_share_server: false,
   share_server_bind_ip: "0.0.0.0",
   share_server_port: "24800",
   share_server_password_enabled: false,
@@ -79,7 +100,7 @@ function toForm(config: AppConfig): AppConfigForm {
     default_share_file: config.default_share_file ?? false,
     default_share_folder: config.default_share_folder ?? false,
     unshare_on_clipboard_change: config.unshare_on_clipboard_change ?? true,
-    enable_share_server: config.enable_share_server ?? false,
+    auto_start_share_server: config.auto_start_share_server ?? false,
     share_server_bind_ip: config.share_server_bind_ip ?? "0.0.0.0",
     share_server_port: String(config.share_server_port ?? 24800),
     share_server_password_enabled: config.share_server_password_enabled ?? false,
@@ -210,7 +231,7 @@ export default function AppConfigWindow() {
         default_share_file: form.default_share_file,
         default_share_folder: form.default_share_folder,
         unshare_on_clipboard_change: form.unshare_on_clipboard_change,
-        enable_share_server: form.enable_share_server,
+        auto_start_share_server: form.auto_start_share_server,
         share_server_bind_ip: shareServerBindIp,
         share_server_port: shareServerPort,
         share_server_password_enabled: form.share_server_password_enabled,
@@ -229,145 +250,126 @@ export default function AppConfigWindow() {
   };
 
   return (
-    <main className="flex h-screen flex-col bg-muted/30">
+    <main className="fluent-shell flex h-screen flex-col overflow-hidden">
       <Toaster />
-      <header className="flex h-11 items-center justify-between border-b bg-background px-3" data-tauri-drag-region onMouseDown={handleTitleBarMouseDown}>
-        <Button variant="ghost" size="sm" data-no-drag="true" onClick={() => void handleReload(true)} disabled={loading}>
-          <RefreshCcw size={16} data-no-drag="true" />
+      <header className="fluent-titlebar" data-tauri-drag-region onMouseDown={handleTitleBarMouseDown}>
+        <Button variant="ghost" size="icon" className="h-8 w-8 rounded-md hover:bg-slate-200/70" data-no-drag="true" onClick={() => void handleReload(true)} disabled={loading}>
+          <RefreshCcw size={16} />
         </Button>
-        <h1 className="select-none text-sm font-medium" data-tauri-drag-region>设置</h1>
-        <Button variant="ghost" size="sm" data-no-drag="true" onClick={() => operationWindow("close", "app-config")}>
-          <X />
+        <div className="select-none text-center" data-tauri-drag-region>
+          <h1 className="text-sm font-semibold text-slate-950">设置</h1>
+          <p className="text-[11px] text-slate-500">应用偏好与共享服务</p>
+        </div>
+        <Button variant="ghost" size="icon" className="h-8 w-8 rounded-md hover:bg-red-50 hover:text-red-600" data-no-drag="true" onClick={() => operationWindow("close", "app-config")}>
+          <X size={16} />
         </Button>
       </header>
 
-      <div className="flex-1 overflow-y-auto p-4 pb-24">
-        {loading && !data ? <p className="text-sm text-muted-foreground">加载中...</p> : null}
+      <div className="fluent-scrollbar flex-1 overflow-y-auto p-4 pb-24">
+        {loading && !data ? <p className="rounded-lg border border-white/70 bg-white/70 px-3 py-2 text-sm text-slate-500">加载中...</p> : null}
         {data ? (
-          <div className="space-y-4">
-            <section className="space-y-3 rounded-md border bg-background p-4">
-              <h2 className="text-sm font-semibold text-muted-foreground">共享服务器</h2>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <label className="flex items-center gap-2 text-sm sm:col-span-2">
-                  <input type="checkbox" checked={form.enable_share_server} onChange={(e) => setForm((prev) => ({ ...prev, enable_share_server: e.target.checked }))} />
-                  <span className="text-muted-foreground">启动共享服务器</span>
-                </label>
-                <label className="space-y-1 text-sm">
-                  <span className="text-muted-foreground">绑定IP</span>
-                  <select className="h-9 w-full rounded-md border bg-transparent px-3 text-sm outline-none focus:ring-2 focus:ring-ring" value={form.share_server_bind_ip} onChange={(e) => setForm((prev) => ({ ...prev, share_server_bind_ip: e.target.value }))}>
+          <div className="mx-auto max-w-4xl space-y-4">
+            <SettingsSection title="共享服务器">
+                <SettingsRow label="自动启动">
+                  <input className="fluent-check" type="checkbox" checked={form.auto_start_share_server} onChange={(e) => setForm((prev) => ({ ...prev, auto_start_share_server: e.target.checked }))} />
+                </SettingsRow>
+                <SettingsRow label="绑定 IP">
+                  <select className="fluent-input" value={form.share_server_bind_ip} onChange={(e) => setForm((prev) => ({ ...prev, share_server_bind_ip: e.target.value }))}>
                     {ipOptions.map((ip) => (
                       <option key={ip} value={ip}>{ip}</option>
                     ))}
                   </select>
-                </label>
-                <label className="space-y-1 text-sm">
-                  <span className="text-muted-foreground">共享服务端口</span>
-                  <input className="h-9 w-full rounded-md border bg-transparent px-3 text-sm outline-none focus:ring-2 focus:ring-ring" value={form.share_server_port} onChange={(e) => setForm((prev) => ({ ...prev, share_server_port: e.target.value }))} placeholder="24800" />
-                </label>
-                <label className="flex items-center gap-2 text-sm">
-                  <input type="checkbox" checked={form.share_server_password_enabled} onChange={(e) => setForm((prev) => ({ ...prev, share_server_password_enabled: e.target.checked }))} />
-                  <span className="text-muted-foreground">启用访问密码</span>
-                </label>
-                <label className="space-y-1 text-sm">
-                  <span className="text-muted-foreground">密码哈希</span>
-                  <input className="h-9 w-full rounded-md border bg-transparent px-3 text-sm outline-none focus:ring-2 focus:ring-ring" value={form.share_server_password_hash} onChange={(e) => setForm((prev) => ({ ...prev, share_server_password_hash: e.target.value }))} placeholder="后续授权链路使用" />
-                </label>
-                <label className="space-y-1 text-sm">
-                  <span className="text-muted-foreground">授权模式</span>
-                  <select className="h-9 w-full rounded-md border bg-transparent px-3 text-sm outline-none focus:ring-2 focus:ring-ring" value={form.share_server_auth_mode} onChange={(e) => setForm((prev) => ({ ...prev, share_server_auth_mode: e.target.value }))}>
+                </SettingsRow>
+                <SettingsRow label="端口">
+                  <input className="fluent-input" value={form.share_server_port} onChange={(e) => setForm((prev) => ({ ...prev, share_server_port: e.target.value }))} placeholder="24800" />
+                </SettingsRow>
+                <SettingsRow label="访问密码">
+                  <input className="fluent-check" type="checkbox" checked={form.share_server_password_enabled} onChange={(e) => setForm((prev) => ({ ...prev, share_server_password_enabled: e.target.checked }))} />
+                </SettingsRow>
+                <SettingsRow label="连接密码" wide>
+                  <input className="fluent-input" type="password" value={form.share_server_password_hash} onChange={(e) => setForm((prev) => ({ ...prev, share_server_password_hash: e.target.value }))} placeholder="远程连接申请时校验" />
+                </SettingsRow>
+                <SettingsRow label="授权模式">
+                  <select className="fluent-input" value={form.share_server_auth_mode} onChange={(e) => setForm((prev) => ({ ...prev, share_server_auth_mode: e.target.value }))}>
                     <option value="1">需要确认</option>
                     <option value="0">自动授权</option>
                   </select>
-                </label>
-                <label className="flex items-center gap-2 text-sm">
-                  <input type="checkbox" checked={form.browser_access_enabled} onChange={(e) => setForm((prev) => ({ ...prev, browser_access_enabled: e.target.checked }))} />
-                  <span className="text-muted-foreground">允许浏览器浏览下载</span>
-                </label>
-                <label className="flex items-center gap-2 text-sm">
-                  <input type="checkbox" checked={form.sync_access_enabled} onChange={(e) => setForm((prev) => ({ ...prev, sync_access_enabled: e.target.checked }))} />
-                  <span className="text-muted-foreground">允许客户端同步访问</span>
-                </label>
-              </div>
-            </section>
+                </SettingsRow>
+                <SettingsRow label="浏览器访问">
+                  <input className="fluent-check" type="checkbox" checked={form.browser_access_enabled} onChange={(e) => setForm((prev) => ({ ...prev, browser_access_enabled: e.target.checked }))} />
+                </SettingsRow>
+                <SettingsRow label="客户端同步">
+                  <input className="fluent-check" type="checkbox" checked={form.sync_access_enabled} onChange={(e) => setForm((prev) => ({ ...prev, sync_access_enabled: e.target.checked }))} />
+                </SettingsRow>
+            </SettingsSection>
 
-            <section className="space-y-3 rounded-md border bg-background p-4">
-              <h2 className="text-sm font-semibold text-muted-foreground">基础设置</h2>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <label className="space-y-1 text-sm">
-                  <span className="text-muted-foreground">快捷键</span>
-                  <HotkeyInput className="h-9 w-full rounded-md border bg-transparent px-3 text-sm outline-none focus:ring-2 focus:ring-ring" value={form.shortcut} onChange={(newShortcut) => setForm((prev) => ({ ...prev, shortcut: newShortcut }))} placeholder="f4" />
-                </label>
-                <label className="space-y-1 text-sm">
-                  <span className="text-muted-foreground">窗口宽度</span>
-                  <input className="h-9 w-full rounded-md border bg-transparent px-3 text-sm outline-none focus:ring-2 focus:ring-ring" value={form.clipboard_window_width} onChange={(e) => setForm((prev) => ({ ...prev, clipboard_window_width: e.target.value }))} placeholder="420" />
-                </label>
-                <label className="space-y-1 text-sm">
-                  <span className="text-muted-foreground">窗口高度</span>
-                  <input className="h-9 w-full rounded-md border bg-transparent px-3 text-sm outline-none focus:ring-2 focus:ring-ring" value={form.clipboard_window_height} onChange={(e) => setForm((prev) => ({ ...prev, clipboard_window_height: e.target.value }))} placeholder="640" />
-                </label>
-                <label className="space-y-1 text-sm">
-                  <span className="text-muted-foreground">窗口间距</span>
-                  <input className="h-9 w-full rounded-md border bg-transparent px-3 text-sm outline-none focus:ring-2 focus:ring-ring" value={form.clipboard_window_spacing} onChange={(e) => setForm((prev) => ({ ...prev, clipboard_window_spacing: e.target.value }))} placeholder="10" />
-                </label>
-              </div>
-            </section>
+            <SettingsSection title="基础设置">
+              <SettingsRow label="快捷键">
+                <HotkeyInput className="fluent-input" value={form.shortcut} onChange={(newShortcut) => setForm((prev) => ({ ...prev, shortcut: newShortcut }))} placeholder="f4" />
+              </SettingsRow>
+              <SettingsRow label="窗口宽度">
+                <input className="fluent-input" value={form.clipboard_window_width} onChange={(e) => setForm((prev) => ({ ...prev, clipboard_window_width: e.target.value }))} placeholder="420" />
+              </SettingsRow>
+              <SettingsRow label="窗口高度">
+                <input className="fluent-input" value={form.clipboard_window_height} onChange={(e) => setForm((prev) => ({ ...prev, clipboard_window_height: e.target.value }))} placeholder="640" />
+              </SettingsRow>
+              <SettingsRow label="窗口间距">
+                <input className="fluent-input" value={form.clipboard_window_spacing} onChange={(e) => setForm((prev) => ({ ...prev, clipboard_window_spacing: e.target.value }))} placeholder="10" />
+              </SettingsRow>
+            </SettingsSection>
 
-            <section className="space-y-3 rounded-md border bg-background p-4">
-              <h2 className="text-sm font-semibold text-muted-foreground">缓存</h2>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <label className="space-y-1 text-sm">
-                  <span className="text-muted-foreground">缓存目录</span>
-                  <div className="flex gap-2">
-                    <input className="h-9 flex-1 rounded-md border bg-transparent px-3 text-sm outline-none focus:ring-2 focus:ring-ring" value={form.cache_dir} onChange={(e) => setForm((prev) => ({ ...prev, cache_dir: e.target.value }))} placeholder="cache" />
-                    <button type="button" onClick={() => handleSelectDirectory("cache_dir")} className="h-9 rounded-md border bg-secondary px-3 text-sm hover:bg-secondary/80">选择</button>
-                  </div>
-                </label>
-                <label className="space-y-1 text-sm">
-                  <span className="text-muted-foreground">远程缓存目录</span>
-                  <div className="flex gap-2">
-                    <input className="h-9 flex-1 rounded-md border bg-transparent px-3 text-sm outline-none focus:ring-2 focus:ring-ring" value={form.remote_cache_dir} onChange={(e) => setForm((prev) => ({ ...prev, remote_cache_dir: e.target.value }))} placeholder="remote" />
-                    <button type="button" onClick={() => handleSelectDirectory("remote_cache_dir")} className="h-9 rounded-md border bg-secondary px-3 text-sm hover:bg-secondary/80">选择</button>
-                  </div>
-                </label>
-              </div>
-            </section>
+            <SettingsSection title="缓存">
+              <SettingsRow label="缓存目录" wide>
+                <div className="flex gap-2">
+                  <input className="fluent-input flex-1" value={form.cache_dir} onChange={(e) => setForm((prev) => ({ ...prev, cache_dir: e.target.value }))} placeholder="cache" />
+                  <button type="button" onClick={() => handleSelectDirectory("cache_dir")} className="h-9 rounded-md border border-slate-200 bg-white/80 px-3 text-sm text-slate-700 hover:bg-white">选择</button>
+                </div>
+              </SettingsRow>
+              <SettingsRow label="远程缓存目录" wide>
+                <div className="flex gap-2">
+                  <input className="fluent-input flex-1" value={form.remote_cache_dir} onChange={(e) => setForm((prev) => ({ ...prev, remote_cache_dir: e.target.value }))} placeholder="remote" />
+                  <button type="button" onClick={() => handleSelectDirectory("remote_cache_dir")} className="h-9 rounded-md border border-slate-200 bg-white/80 px-3 text-sm text-slate-700 hover:bg-white">选择</button>
+                </div>
+              </SettingsRow>
+            </SettingsSection>
 
-            <section className="space-y-3 rounded-md border bg-background p-4">
-              <h2 className="text-sm font-semibold text-muted-foreground">清理策略</h2>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <label className="flex items-center gap-2 text-sm">
-                  <input type="checkbox" checked={form.auto_cleanup_invalid_clipboard_data} onChange={(e) => setForm((prev) => ({ ...prev, auto_cleanup_invalid_clipboard_data: e.target.checked }))} />
-                  <span className="text-muted-foreground">自动清理失效数据</span>
-                </label>
-                <label className="space-y-1 text-sm">
-                  <span className="text-muted-foreground">自动清理天数</span>
-                  <input className="h-9 w-full rounded-md border bg-transparent px-3 text-sm outline-none focus:ring-2 focus:ring-ring" value={form.cleanup_after_days} onChange={(e) => setForm((prev) => ({ ...prev, cleanup_after_days: e.target.value }))} placeholder="留空表示不自动清理" />
-                </label>
-                <label className="space-y-1 text-sm">
-                  <span className="text-muted-foreground">最大条目数</span>
-                  <input className="h-9 w-full rounded-md border bg-transparent px-3 text-sm outline-none focus:ring-2 focus:ring-ring" value={form.max_items} onChange={(e) => setForm((prev) => ({ ...prev, max_items: e.target.value }))} placeholder="留空表示无限制" />
-                </label>
-              </div>
-            </section>
+            <SettingsSection title="清理策略">
+              <SettingsRow label="自动清理失效数据">
+                <input className="fluent-check" type="checkbox" checked={form.auto_cleanup_invalid_clipboard_data} onChange={(e) => setForm((prev) => ({ ...prev, auto_cleanup_invalid_clipboard_data: e.target.checked }))} />
+              </SettingsRow>
+              <SettingsRow label="自动清理天数">
+                <input className="fluent-input" value={form.cleanup_after_days} onChange={(e) => setForm((prev) => ({ ...prev, cleanup_after_days: e.target.value }))} placeholder="留空表示不自动清理" />
+              </SettingsRow>
+              <SettingsRow label="最大条目数">
+                <input className="fluent-input" value={form.max_items} onChange={(e) => setForm((prev) => ({ ...prev, max_items: e.target.value }))} placeholder="留空表示无限制" />
+              </SettingsRow>
+            </SettingsSection>
 
-            <section className="space-y-3 rounded-md border bg-background p-4">
-              <h2 className="text-sm font-semibold text-muted-foreground">默认分享</h2>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.default_share_text} onChange={(e) => setForm((prev) => ({ ...prev, default_share_text: e.target.checked }))} /><span className="text-muted-foreground">文本</span></label>
-                <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.default_share_image} onChange={(e) => setForm((prev) => ({ ...prev, default_share_image: e.target.checked }))} /><span className="text-muted-foreground">图片</span></label>
-                <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.default_share_file} onChange={(e) => setForm((prev) => ({ ...prev, default_share_file: e.target.checked }))} /><span className="text-muted-foreground">文件</span></label>
-                <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.default_share_folder} onChange={(e) => setForm((prev) => ({ ...prev, default_share_folder: e.target.checked }))} /><span className="text-muted-foreground">文件夹</span></label>
-                <label className="flex items-center gap-2 text-sm sm:col-span-2"><input type="checkbox" checked={form.unshare_on_clipboard_change} onChange={(e) => setForm((prev) => ({ ...prev, unshare_on_clipboard_change: e.target.checked }))} /><span className="text-muted-foreground">剪贴板变化时取消上一条临时分享</span></label>
-              </div>
-            </section>
+            <SettingsSection title="默认分享">
+              <SettingsRow label="文本">
+                <input className="fluent-check" type="checkbox" checked={form.default_share_text} onChange={(e) => setForm((prev) => ({ ...prev, default_share_text: e.target.checked }))} />
+              </SettingsRow>
+              <SettingsRow label="图片">
+                <input className="fluent-check" type="checkbox" checked={form.default_share_image} onChange={(e) => setForm((prev) => ({ ...prev, default_share_image: e.target.checked }))} />
+              </SettingsRow>
+              <SettingsRow label="文件">
+                <input className="fluent-check" type="checkbox" checked={form.default_share_file} onChange={(e) => setForm((prev) => ({ ...prev, default_share_file: e.target.checked }))} />
+              </SettingsRow>
+              <SettingsRow label="文件夹">
+                <input className="fluent-check" type="checkbox" checked={form.default_share_folder} onChange={(e) => setForm((prev) => ({ ...prev, default_share_folder: e.target.checked }))} />
+              </SettingsRow>
+              <SettingsRow label="复制文件变化时清理临时分享" wide>
+                <input className="fluent-check" type="checkbox" checked={form.unshare_on_clipboard_change} onChange={(e) => setForm((prev) => ({ ...prev, unshare_on_clipboard_change: e.target.checked }))} />
+              </SettingsRow>
+            </SettingsSection>
           </div>
         ) : null}
       </div>
 
-      <footer className="sticky bottom-0 border-t bg-background/95 px-4 py-3 backdrop-blur">
+      <footer className="sticky bottom-0 border-t border-white/70 bg-white/80 px-4 py-3 backdrop-blur">
         <div className="mx-auto flex max-w-5xl items-center justify-end gap-2">
-          <Button variant="outline" size="sm" onClick={() => void handleReload(true)} disabled={loading}>重新加载</Button>
-          <Button size="sm" onClick={() => void handleSave()} disabled={saving}>{saving ? "保存中..." : "保存设置"}</Button>
+          <Button variant="outline" size="sm" className="rounded-md border-slate-200 bg-white/70" onClick={() => void handleReload(true)} disabled={loading}>重新加载</Button>
+          <Button size="sm" className="rounded-md bg-sky-600 text-white hover:bg-sky-700" onClick={() => void handleSave()} disabled={saving}>{saving ? "保存中..." : "保存设置"}</Button>
         </div>
       </footer>
     </main>

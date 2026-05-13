@@ -12,6 +12,11 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use walkdir::WalkDir;
 
+use crate::db::service::clipboard::invalidate_shared_clipboards_by_fs_change;
+use crate::db::service::local_files::{
+    cleanup_missing_local_files, cleanup_orphaned_clipboard_local_files, expire_temp_local_files,
+};
+use crate::db::DbState;
 use crate::entity::{local_file_index, local_files};
 use crate::server::share::{canonicalize_existing, relative_path_for, ROOT_RELATIVE_PATH};
 
@@ -42,6 +47,9 @@ pub async fn start(db: DatabaseConnection) -> SyncRuntime {
     let scan_db = db.clone();
     let mut scan_shutdown = shutdown_rx.clone();
     tasks.push(tokio::spawn(async move {
+        let _ = expire_temp_local_files(&scan_db).await;
+        let _ = cleanup_orphaned_clipboard_local_files(&scan_db).await;
+        let _ = cleanup_missing_local_files(&scan_db).await;
         let _ = scan_local_shares_once(&scan_db).await;
         loop {
             tokio::select! {
@@ -51,6 +59,9 @@ pub async fn start(db: DatabaseConnection) -> SyncRuntime {
                     }
                 }
                 _ = tokio::time::sleep(std::time::Duration::from_secs(300)) => {
+                    let _ = expire_temp_local_files(&scan_db).await;
+                    let _ = cleanup_orphaned_clipboard_local_files(&scan_db).await;
+                    let _ = cleanup_missing_local_files(&scan_db).await;
                     let _ = scan_local_shares_once(&scan_db).await;
                 }
             }
@@ -113,6 +124,9 @@ async fn run_watcher_loop(
             }
             maybe_path = rx.recv() => {
                 if let Some(path) = maybe_path {
+                    let _ = expire_temp_local_files(&db).await;
+                    let _ = cleanup_orphaned_clipboard_local_files(&db).await;
+                    let _ = cleanup_missing_local_files(&db).await;
                     let _ = upsert_path_for_matching_shares(&db, &roots, path).await;
                 }
             }
@@ -172,6 +186,16 @@ async fn run_hash_worker(
 }
 
 pub async fn scan_local_shares_once(db: &DatabaseConnection) -> Result<(), String> {
+    expire_temp_local_files(db)
+        .await
+        .map_err(|e| format!("expire temp local files failed: {e}"))?;
+    cleanup_orphaned_clipboard_local_files(db)
+        .await
+        .map_err(|e| format!("cleanup orphaned clipboard local files failed: {e}"))?;
+    cleanup_missing_local_files(db)
+        .await
+        .map_err(|e| format!("cleanup missing local files failed: {e}"))?;
+
     let roots = list_local_share_roots(db).await?;
     for share in roots {
         if share.root.is_file() {
@@ -197,6 +221,10 @@ async fn upsert_path_for_matching_shares(
     let target = match canonicalize_existing(&path) {
         Ok(target) => target,
         Err(_) => {
+            let db_state = DbState { conn: db.clone() };
+            invalidate_shared_clipboards_by_fs_change(&db_state, &path)
+                .await
+                .map_err(|e| format!("invalidate shared clipboards failed: {e}"))?;
             mark_deleted_by_path(db, &path).await?;
             return Ok(());
         }
