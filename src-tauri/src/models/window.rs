@@ -10,6 +10,7 @@ pub enum WindowOperations {
 
 // 窗口label
 pub enum WindowLabel {
+    #[allow(dead_code)]
     Clipboard, // 剪切板
     Config,    // 设置
     ShareFile, // 分享文件

@@ -3,10 +3,14 @@
 pub mod prelude;
 
 pub mod clipboard_record;
+#[allow(dead_code)]
 pub mod connection_log;
+#[allow(dead_code)]
 pub mod inbound_connections;
 pub mod local_file_index;
 pub mod local_files;
 pub mod outbound_connections;
+#[allow(dead_code)]
 pub mod shared_file_index;
+#[allow(dead_code)]
 pub mod shared_files;

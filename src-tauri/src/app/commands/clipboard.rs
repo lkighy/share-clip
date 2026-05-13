@@ -8,6 +8,7 @@ use crate::platform::automation::{Automation, InjectContent};
 use html2text::from_read;
 use log::{error, info};
 use std::path::PathBuf;
+use std::time::Duration;
 use tauri::Manager;
 
 // 查询列表
@@ -51,49 +52,40 @@ pub async fn paste_clipboard_record(app: tauri::AppHandle, id: i32) -> Result<()
         return Err(AppError::NotFound.into());
     };
 
-    let mut auto = Automation::new();
-
-    match record.r#type {
+    let content = match record.r#type {
         t if t == ClipboardType::Text as i32 => {
             let data = String::from_utf8(record.data.unwrap_or_default()).map_err(|e| {
                 error!("paste_clipboard_record utf8 decode failed: id={id}, type=text, error={e}");
                 AppError::from(e)
             })?;
-            auto.inject(InjectContent::Text(data)).map_err(|e| {
-                error!("paste_clipboard_record inject text failed: id={id}, error={e}");
-                AppError::from(e)
-            })?;
+            Some(InjectContent::Text(data))
         }
         t if t == ClipboardType::Html as i32 => {
             let data = String::from_utf8(record.data.unwrap_or_default()).map_err(|e| {
                 error!("paste_clipboard_record utf8 decode failed: id={id}, type=html, error={e}");
                 AppError::from(e)
             })?;
-            auto.inject(InjectContent::Html(data)).map_err(|e| {
-                error!("paste_clipboard_record inject html failed: id={id}, error={e}");
-                AppError::from(e)
-            })?;
+            Some(InjectContent::Html(data))
         }
         t if t == ClipboardType::Rtf as i32 => {
             let data = String::from_utf8(record.data.unwrap_or_default()).map_err(|e| {
                 error!("paste_clipboard_record utf8 decode failed: id={id}, type=rtf, error={e}");
                 AppError::from(e)
             })?;
-            auto.inject(InjectContent::Rtf(data)).map_err(|e| {
-                error!("paste_clipboard_record inject rtf failed: id={id}, error={e}");
-                AppError::from(e)
-            })?;
+            Some(InjectContent::Rtf(data))
         }
         t if t == ClipboardType::Image as i32 => {
-            let data = String::from_utf8(record.data.unwrap_or_default()).map_err(|e| {
+            let path = String::from_utf8(record.data.unwrap_or_default()).map_err(|e| {
                 error!("paste_clipboard_record utf8 decode failed: id={id}, type=image, error={e}");
                 AppError::from(e)
             })?;
-            auto.inject(InjectContent::Files(vec![PathBuf::from(data)]))
-                .map_err(|e| {
-                    error!("paste_clipboard_record inject image-path failed: id={id}, error={e}");
-                    AppError::from(e)
-                })?;
+            let image_data = std::fs::read(&path).map_err(|e| {
+                error!(
+                    "paste_clipboard_record read image cache failed: id={id}, path={path}, error={e}"
+                );
+                AppError::from(e)
+            })?;
+            Some(InjectContent::Image(image_data))
         }
         t if t == ClipboardType::File as i32 || t == ClipboardType::Folder as i32 => {
             let data = String::from_utf8(record.data.unwrap_or_default()).map_err(|e| {
@@ -105,16 +97,37 @@ pub async fn paste_clipboard_record(app: tauri::AppHandle, id: i32) -> Result<()
                 AppError::from(e)
             })?;
 
-            auto.inject(InjectContent::Files(
+            Some(InjectContent::Files(
                 files.into_iter().map(PathBuf::from).collect(),
             ))
-            .map_err(|e| {
-                error!("paste_clipboard_record inject files failed: id={id}, error={e}");
-                AppError::from(e)
-            })?;
         }
-        _ => {}
+        _ => None,
+    };
+
+    if let Some(content) = content {
+        let mut auto = Automation::new();
+        crate::services::clipboard_watcher::suppress_next_clipboard_changes(
+            1,
+            Duration::from_secs(2),
+        );
+        if let Err(e) = auto.inject(content) {
+            crate::services::clipboard_watcher::clear_suppressed_clipboard_changes();
+            error!("paste_clipboard_record inject failed: id={id}, error={e}");
+            return Err(AppError::from(e).into());
+        }
     }
+
+    db::service::clipboard::mark_record_accessed(&db, id)
+        .await
+        .map_err(|e| {
+            error!("paste_clipboard_record mark accessed failed: id={id}, error={e}");
+            AppError::from(e)
+        })?;
+    crate::app::events::emit_clipboard_changed(
+        &app,
+        vec![id.to_string()],
+        "clipboard_record_accessed",
+    );
 
     #[cfg(target_os = "windows")]
     crate::platform::non_activating::windows::hide_window();

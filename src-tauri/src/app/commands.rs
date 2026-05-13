@@ -1,5 +1,6 @@
 pub mod clipboard;
 pub mod config;
+#[allow(dead_code)]
 pub mod local_file;
 pub mod server;
 pub mod share_files;

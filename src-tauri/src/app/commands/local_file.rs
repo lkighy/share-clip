@@ -20,7 +20,7 @@ use tauri::AppHandle;
 // ]}
 #[tauri::command]
 pub async fn list_shared_files(
-    app: AppHandle,
+    _app: AppHandle,
     id: Option<String>,
     path: Option<String>,
 ) -> Result<DirectoryList, String> {

@@ -2,9 +2,13 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
 pub const LOCAL_FILES_CHANGED: &str = "share://local-files-changed";
+#[allow(dead_code)]
 pub const SHARED_FILES_CHANGED: &str = "share://shared-files-changed";
+#[allow(dead_code)]
 pub const SHARED_FILE_INDEX_CHANGED: &str = "share://shared-file-index-changed";
+#[allow(dead_code)]
 pub const INBOUND_REQUESTED: &str = "share://inbound-requested";
+#[allow(dead_code)]
 pub const CONNECTION_STATUS_CHANGED: &str = "share://connection-status-changed";
 pub const CLIPBOARD_CHANGED: &str = "clipboard://changed";
 pub const SERVER_STATUS_CHANGED: &str = "server://status-changed";
@@ -21,10 +25,12 @@ pub fn emit_local_files_changed(app: &AppHandle, ids: Vec<String>, reason: &'sta
     emit_data_changed(app, LOCAL_FILES_CHANGED, "local_files", ids, reason);
 }
 
+#[allow(dead_code)]
 pub fn emit_shared_files_changed(app: &AppHandle, ids: Vec<String>, reason: &'static str) {
     emit_data_changed(app, SHARED_FILES_CHANGED, "shared_files", ids, reason);
 }
 
+#[allow(dead_code)]
 pub fn emit_shared_file_index_changed(app: &AppHandle, ids: Vec<String>, reason: &'static str) {
     emit_data_changed(
         app,

@@ -4,8 +4,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use blake3::Hasher;
 use notify::{Config, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait, ModelTrait,
-    QueryFilter, QueryOrder,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter,
+    QueryOrder,
 };
 use tokio::io::AsyncReadExt;
 use tokio::sync::watch;

@@ -4,8 +4,6 @@ use clipboard_win::Setter;
 use enigo::Direction::{Click, Press, Release};
 use enigo::{Enigo, Key, Keyboard, Settings};
 use std::path::PathBuf;
-use std::thread;
-use std::time::Duration;
 
 use crate::platform::automation::InjectContent;
 

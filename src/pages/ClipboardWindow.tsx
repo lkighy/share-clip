@@ -139,9 +139,13 @@ function ClipboardWindow() {
     const unlistenShortcutInvoke = listen("clipboard-window-invoked", () => {
       void refreshRecords();
     });
+    const unlistenClipboardChanged = listen("clipboard://changed", () => {
+      void refreshRecords();
+    });
 
     return () => {
       unlistenShortcutInvoke.then((unlisten) => unlisten());
+      unlistenClipboardChanged.then((unlisten) => unlisten());
     };
   }, []);
 

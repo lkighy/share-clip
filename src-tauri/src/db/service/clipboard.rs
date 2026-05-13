@@ -28,7 +28,10 @@ pub async fn list_records(
             e
         })?;
 
-    Ok(rows.into_iter().map(clipboard_response_from_model).collect())
+    Ok(rows
+        .into_iter()
+        .map(clipboard_response_from_model)
+        .collect())
 }
 
 fn clipboard_response_from_model(record: Model) -> ClipboardResponse {
@@ -67,9 +70,13 @@ fn build_clipboard_file_items(record: &Model) -> Option<Vec<ClipboardFileItem>> 
             let exists = canonical.exists();
             let metadata = std::fs::metadata(&canonical).ok();
             let is_dir = metadata.as_ref().map(|m| m.is_dir()).unwrap_or(false);
-            let size = metadata
-                .as_ref()
-                .and_then(|m| if m.is_file() { Some(m.len() as i64) } else { None });
+            let size = metadata.as_ref().and_then(|m| {
+                if m.is_file() {
+                    Some(m.len() as i64)
+                } else {
+                    None
+                }
+            });
             let name = canonical
                 .file_name()
                 .and_then(|x| x.to_str())
@@ -188,6 +195,28 @@ pub async fn toggle_favorite(db: &DbState, id: i32) -> Result<bool, AppError> {
     })?;
 
     Ok(new_favorite == 1)
+}
+
+pub async fn mark_record_accessed(db: &DbState, id: i32) -> Result<(), AppError> {
+    let record = Entity::find_by_id(id)
+        .one(&db.conn)
+        .await
+        .map_err(|e| {
+            debug!("mark_record_accessed query failed: id={id}, error={e}");
+            AppError::from(e)
+        })?
+        .ok_or(AppError::NotFound)?;
+
+    let next_access_count = record.access_count.saturating_add(1);
+    let mut active: ActiveModel = record.into();
+    active.last_accessed_at = Set(chrono::Utc::now().timestamp());
+    active.access_count = Set(next_access_count);
+    active.update(&db.conn).await.map_err(|e| {
+        debug!("mark_record_accessed update failed: id={id}, error={e}");
+        AppError::from(e)
+    })?;
+
+    Ok(())
 }
 
 pub async fn toggle_share(db: &DbState, id: i32) -> Result<bool, AppError> {

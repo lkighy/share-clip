@@ -2,10 +2,7 @@ use crate::app::config::AppConfigStore;
 use crate::models::window::WindowLabel;
 #[cfg(target_os = "windows")]
 use crate::platform::non_activating::windows;
-use tauri::ipc::RuntimeCapability;
-use tauri::utils::config::WindowConfig;
-use tauri::utils::config_v1::WindowUrl;
-use tauri::{App, LogicalSize, Manager, WebviewUrl, WebviewWindow, WindowBuilder};
+use tauri::{App, LogicalSize, Manager, WebviewUrl, WebviewWindow};
 
 pub fn init_app(app: &mut App) {
     let config = app.state::<AppConfigStore>();

@@ -33,7 +33,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip';
-import {cn} from "@/lib/utils.ts";
+import { cn, formatDisplayPath } from "@/lib/utils.ts";
 
 const formatSize = (bytes?: number): string => {
   if (!bytes || bytes === 0) return '';
@@ -131,6 +131,7 @@ export const ClipboardListItem: React.FC<ClipboardListItemProps> = ({
           <div className="space-y-1">
             {visibleItems.map((file) => {
               const Icon = file.isDir ? Folder : file.type === 2 ? ImageIcon : File;
+              const displayPath = formatDisplayPath(file.path);
               return (
                 <div
                   key={file.path}
@@ -138,14 +139,14 @@ export const ClipboardListItem: React.FC<ClipboardListItemProps> = ({
                     'rounded-md border bg-background/70 px-2 py-1.5',
                     !file.exists && 'opacity-60',
                   )}
-                  title={file.path}
+                  title={displayPath}
                 >
                   <div className="flex min-w-0 items-center gap-2">
                     <Icon size={14} className={file.isDir ? 'text-sky-500' : file.type === 2 ? 'text-violet-500' : 'text-muted-foreground'} />
                     <span className="min-w-0 flex-1 truncate text-xs font-medium">{file.name}</span>
                     <span className="shrink-0 text-[11px] text-muted-foreground">{file.exists ? formatSizeLabel(file.size) : '已失效'}</span>
                   </div>
-                  <div className="mt-1 truncate pl-5 text-[11px] text-muted-foreground">{file.path}</div>
+                  <div className="mt-1 truncate pl-5 text-[11px] text-muted-foreground">{displayPath}</div>
                 </div>
               );
             })}

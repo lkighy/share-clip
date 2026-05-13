@@ -15,7 +15,7 @@ use tokio_util::io::ReaderStream;
 
 use super::{json_error, HttpState};
 use crate::entity::{local_file_index, local_files};
-use crate::server::share::{relative_path_for, resolve_share_path, ROOT_RELATIVE_PATH};
+use crate::server::share::{resolve_share_path, ROOT_RELATIVE_PATH};
 
 #[derive(Deserialize)]
 struct RelativePathQuery {

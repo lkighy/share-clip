@@ -4,12 +4,17 @@ use clipboard_rs::{
 };
 use log::{error, info};
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::thread;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::AppHandle;
 
 use crate::services::clipboard_storage::save_clipboard_item;
 use crate::utils::format::normalize_file_uri;
+
+static SUPPRESSED_CLIPBOARD_CHANGE_COUNT: AtomicUsize = AtomicUsize::new(0);
+static SUPPRESSED_CLIPBOARD_CHANGE_UNTIL_MS: AtomicU64 = AtomicU64::new(0);
 
 pub struct AppClipboardHandler {
     pub tx: Sender<ClipboardChangeEvent>,
@@ -25,38 +30,66 @@ pub enum ClipboardChangeEvent {
         files: Vec<String>,
         file_count: usize,
         folder_count: usize,
-        image_count: usize,
     },
     Unknown {
         formats: Vec<String>,
     },
 }
 
-fn is_image_path(path: &str) -> bool {
-    let ext = Path::new(path)
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_ascii_lowercase());
+pub fn suppress_next_clipboard_changes(count: usize, duration: Duration) {
+    let now = current_time_ms();
+    let duration_ms = u64::try_from(duration.as_millis()).unwrap_or(u64::MAX);
+    SUPPRESSED_CLIPBOARD_CHANGE_COUNT.store(count, Ordering::SeqCst);
+    SUPPRESSED_CLIPBOARD_CHANGE_UNTIL_MS.store(now.saturating_add(duration_ms), Ordering::SeqCst);
+}
 
-    matches!(
-        ext.as_deref(),
-        Some("png")
-            | Some("jpg")
-            | Some("jpeg")
-            | Some("gif")
-            | Some("bmp")
-            | Some("webp")
-            | Some("tif")
-            | Some("tiff")
-            | Some("ico")
-            | Some("heic")
-            | Some("avif")
-            | Some("svg")
-    )
+pub fn clear_suppressed_clipboard_changes() {
+    SUPPRESSED_CLIPBOARD_CHANGE_COUNT.store(0, Ordering::SeqCst);
+    SUPPRESSED_CLIPBOARD_CHANGE_UNTIL_MS.store(0, Ordering::SeqCst);
+}
+
+fn should_suppress_clipboard_change() -> bool {
+    let until = SUPPRESSED_CLIPBOARD_CHANGE_UNTIL_MS.load(Ordering::SeqCst);
+    if until == 0 {
+        return false;
+    }
+
+    if current_time_ms() > until {
+        clear_suppressed_clipboard_changes();
+        return false;
+    }
+
+    loop {
+        let count = SUPPRESSED_CLIPBOARD_CHANGE_COUNT.load(Ordering::SeqCst);
+        if count == 0 {
+            return false;
+        }
+        if SUPPRESSED_CLIPBOARD_CHANGE_COUNT
+            .compare_exchange(count, count - 1, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+        {
+            if count == 1 {
+                SUPPRESSED_CLIPBOARD_CHANGE_UNTIL_MS.store(0, Ordering::SeqCst);
+            }
+            return true;
+        }
+    }
+}
+
+fn current_time_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))
+        .unwrap_or(0)
 }
 
 impl ClipboardHandler for AppClipboardHandler {
     fn on_clipboard_change(&mut self) {
+        if should_suppress_clipboard_change() {
+            info!("[Watcher] clipboard changed by internal paste; skipped.");
+            return;
+        }
+
         info!("[Watcher] clipboard changed.");
 
         if let Ok(ctx) = ClipboardContext::new() {
@@ -65,7 +98,6 @@ impl ClipboardHandler for AppClipboardHandler {
                 let files = ctx.get_files().unwrap_or_default();
                 let mut file_count = 0usize;
                 let mut folder_count = 0usize;
-                let mut image_count = 0usize;
 
                 for raw in &files {
                     let normalized = normalize_file_uri(raw);
@@ -75,16 +107,12 @@ impl ClipboardHandler for AppClipboardHandler {
                     } else {
                         file_count += 1;
                     }
-                    if is_image_path(normalized) {
-                        image_count += 1;
-                    }
                 }
 
                 let _ = self.tx.send(ClipboardChangeEvent::Files {
                     files,
                     file_count,
                     folder_count,
-                    image_count,
                 });
                 return;
             }

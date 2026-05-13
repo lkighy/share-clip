@@ -21,6 +21,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { Button } from "@/components/ui/button";
 import { operationWindow } from "@/api/window";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { formatDisplayPath } from "@/lib/utils";
 import {
   addManualSharedPaths,
   listLocalSharedFiles,
@@ -356,7 +357,8 @@ export default function ShareFilesWindow() {
     onAction?: () => void,
     onContextAction?: () => void,
   ) => {
-    const tooltip = `名称: ${name}\n类型: ${isDir ? "文件夹" : "文件"}\n大小: ${formatSize(size)}\n修改日期: ${modified ?? "未知"}\n路径: ${path}`;
+    const displayPath = formatDisplayPath(path);
+    const tooltip = `名称: ${name}\n类型: ${isDir ? "文件夹" : "文件"}\n大小: ${formatSize(size)}\n修改日期: ${modified ?? "未知"}\n路径: ${displayPath}`;
     if (viewMode === "details") {
       return (
         <div

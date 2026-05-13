@@ -90,7 +90,6 @@ pub async fn save_clipboard_item(
             files,
             file_count,
             folder_count,
-            image_count: _,
         } => {
             let normalized_files = files
                 .iter()
