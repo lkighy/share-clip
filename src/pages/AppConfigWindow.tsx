@@ -15,6 +15,7 @@ import HotkeyInput from "@/components/ui/HotkeyInput.tsx";
 import { operationWindow } from "@/api/window.ts";
 
 type AppConfigForm = {
+  local_device_name: string;
   shortcut: string;
   clipboard_window_width: string;
   clipboard_window_height: string;
@@ -37,6 +38,7 @@ type AppConfigForm = {
   share_server_auth_mode: string;
   browser_access_enabled: boolean;
   sync_access_enabled: boolean;
+  popup_on_inbound_request: boolean;
 };
 
 function SettingsSection({ title, children }: { title: string; children: ReactNode }) {
@@ -60,6 +62,7 @@ function SettingsRow({ label, children, wide = false }: { label: string; childre
 }
 
 const emptyForm: AppConfigForm = {
+  local_device_name: "",
   shortcut: "",
   clipboard_window_width: "",
   clipboard_window_height: "",
@@ -82,10 +85,12 @@ const emptyForm: AppConfigForm = {
   share_server_auth_mode: "1",
   browser_access_enabled: true,
   sync_access_enabled: true,
+  popup_on_inbound_request: false,
 };
 
 function toForm(config: AppConfig): AppConfigForm {
   return {
+    local_device_name: config.local_device_name ?? "",
     shortcut: config.shortcut ?? "",
     clipboard_window_width: String(config.clipboard_window_width ?? ""),
     clipboard_window_height: String(config.clipboard_window_height ?? ""),
@@ -108,6 +113,7 @@ function toForm(config: AppConfig): AppConfigForm {
     share_server_auth_mode: String(config.share_server_auth_mode ?? 1),
     browser_access_enabled: config.browser_access_enabled ?? true,
     sync_access_enabled: config.sync_access_enabled ?? true,
+    popup_on_inbound_request: config.popup_on_inbound_request ?? false,
   };
 }
 
@@ -129,6 +135,17 @@ export default function AppConfigWindow() {
 
   useEffect(() => {
     void handleReload(false);
+  }, []);
+
+  useEffect(() => {
+    const preventNativeContextMenu = (event: globalThis.MouseEvent) => {
+      event.preventDefault();
+    };
+
+    window.addEventListener("contextmenu", preventNativeContextMenu);
+    return () => {
+      window.removeEventListener("contextmenu", preventNativeContextMenu);
+    };
   }, []);
 
   useEffect(() => {
@@ -187,8 +204,13 @@ export default function AppConfigWindow() {
   const handleSave = async () => {
     try {
       const shortcut = form.shortcut.trim();
+      const localDeviceName = form.local_device_name.trim();
       if (!shortcut) {
         toast.error("快捷键不能为空");
+        return;
+      }
+      if (!localDeviceName) {
+        toast.error("设备名称不能为空");
         return;
       }
       const width = parseInteger(form.clipboard_window_width, "窗口宽度", 120);
@@ -217,6 +239,7 @@ export default function AppConfigWindow() {
       }
 
       const payload: AppConfigUpdate = {
+        local_device_name: localDeviceName,
         shortcut,
         clipboard_window_width: width,
         clipboard_window_height: height,
@@ -239,6 +262,7 @@ export default function AppConfigWindow() {
         share_server_auth_mode: shareServerAuthMode,
         browser_access_enabled: form.browser_access_enabled,
         sync_access_enabled: form.sync_access_enabled,
+        popup_on_inbound_request: form.popup_on_inbound_request,
       };
 
       await saveAppConfig(payload);
@@ -250,7 +274,7 @@ export default function AppConfigWindow() {
   };
 
   return (
-    <main className="fluent-shell flex h-screen flex-col overflow-hidden">
+    <main className="fluent-shell flex h-screen flex-col overflow-hidden" onContextMenu={(e) => e.preventDefault()}>
       <Toaster />
       <header className="fluent-titlebar" data-tauri-drag-region onMouseDown={handleTitleBarMouseDown}>
         <Button variant="ghost" size="icon" className="h-8 w-8 rounded-md hover:bg-slate-200/70" data-no-drag="true" onClick={() => void handleReload(true)} disabled={loading}>
@@ -270,6 +294,9 @@ export default function AppConfigWindow() {
         {data ? (
           <div className="mx-auto max-w-4xl space-y-4">
             <SettingsSection title="共享服务器">
+                <SettingsRow label="本机设备名称">
+                  <input className="fluent-input" value={form.local_device_name} onChange={(e) => setForm((prev) => ({ ...prev, local_device_name: e.target.value }))} placeholder="本机设备" />
+                </SettingsRow>
                 <SettingsRow label="自动启动">
                   <input className="fluent-check" type="checkbox" checked={form.auto_start_share_server} onChange={(e) => setForm((prev) => ({ ...prev, auto_start_share_server: e.target.checked }))} />
                 </SettingsRow>
@@ -300,6 +327,9 @@ export default function AppConfigWindow() {
                 </SettingsRow>
                 <SettingsRow label="客户端同步">
                   <input className="fluent-check" type="checkbox" checked={form.sync_access_enabled} onChange={(e) => setForm((prev) => ({ ...prev, sync_access_enabled: e.target.checked }))} />
+                </SettingsRow>
+                <SettingsRow label="连接申请弹窗">
+                  <input className="fluent-check" type="checkbox" checked={form.popup_on_inbound_request} onChange={(e) => setForm((prev) => ({ ...prev, popup_on_inbound_request: e.target.checked }))} />
                 </SettingsRow>
             </SettingsSection>
 

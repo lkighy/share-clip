@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use axum::body::Body;
 use axum::extract::{Path as AxumPath, Query, State};
@@ -9,16 +9,20 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter,
-    QueryOrder, QuerySelect,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait,
+    PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,
 };
 use serde::{Deserialize, Serialize};
+use tauri::Manager;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio_util::io::ReaderStream;
 
 use super::{json_error, HttpState};
-use crate::entity::{inbound_connections, local_file_index, local_files};
+use crate::db::service::local_files::{has_clipboard_source, parse_source_clipboard_ids};
+use crate::entity::{clipboard_record, inbound_connections, local_file_index, local_files};
+use crate::models::clipboard::ClipboardType;
 use crate::server::share::{resolve_share_path, ROOT_RELATIVE_PATH};
+use crate::utils::format::normalize_file_uri;
 
 const AUTH_STATUS_UNAUTHENTICATED: i32 = 0;
 const AUTH_STATUS_PENDING: i32 = 1;
@@ -52,6 +56,8 @@ struct FileNode {
     relative_path: String,
     is_dir: bool,
     size: Option<u64>,
+    mtime: Option<i64>,
+    hash: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -59,6 +65,36 @@ struct FileListResponse {
     share_id: String,
     current_path: String,
     items: Vec<FileNode>,
+}
+
+#[derive(Serialize)]
+struct DeviceInfoResponse {
+    device_id: String,
+    device_name: String,
+}
+
+#[derive(Serialize)]
+struct ClipboardContentResponse {
+    id: i32,
+    r#type: i32,
+    text: Option<String>,
+    html: Option<String>,
+    rtf: Option<String>,
+    image_base64: Option<String>,
+    files: Option<Vec<String>>,
+    sync_targets: Option<Vec<ClipboardFileSyncTarget>>,
+}
+
+#[derive(Serialize)]
+struct ClipboardFileSyncTarget {
+    share_id: String,
+    share_name: String,
+    relative_path: String,
+    name: String,
+    is_dir: bool,
+    size: Option<i64>,
+    mtime: Option<i64>,
+    hash: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -103,6 +139,8 @@ struct ConnectionStatusResponse {
     message: String,
     poll_after_ms: u64,
     auth_token: Option<String>,
+    device_id: String,
+    device_name: String,
 }
 
 #[derive(Serialize)]
@@ -117,6 +155,7 @@ struct DiffResponse {
 
 pub fn router() -> Router<HttpState> {
     Router::new()
+        .route("/api/client/device", get(device_info))
         .route("/api/client/connect/request", post(request_connection))
         .route(
             "/api/client/connect/status/{user_id}",
@@ -133,7 +172,24 @@ pub fn router() -> Router<HttpState> {
             "/api/client/shares/{id}/diff",
             axum::routing::post(diff_share),
         )
+        .route("/api/client/clipboard/list", get(list_client_clipboard))
+        .route(
+            "/api/client/clipboard/{id}/content",
+            get(get_client_clipboard_content),
+        )
         .route("/api/files/{id}/download", get(download_share_file))
+}
+
+async fn device_info(State(state): State<HttpState>) -> Response {
+    let config = state
+        .app
+        .state::<crate::app::config::AppConfigStore>()
+        .get();
+    Json(DeviceInfoResponse {
+        device_id: config.local_device_id,
+        device_name: config.local_device_name,
+    })
+    .into_response()
 }
 
 async fn request_connection(State(state): State<HttpState>, body: String) -> Response {
@@ -146,7 +202,10 @@ async fn request_connection(State(state): State<HttpState>, body: String) -> Res
         return json_error(StatusCode::BAD_REQUEST, "user_id is required");
     }
 
-    let config = crate::app::config::load_or_create_config();
+    let config = state
+        .app
+        .state::<crate::app::config::AppConfigStore>()
+        .get();
     if config.share_server_password_enabled {
         let expected = config
             .share_server_password_hash
@@ -252,7 +311,37 @@ async fn request_connection(State(state): State<HttpState>, body: String) -> Res
         }
     }
 
-    Json(connection_status_body(auth_status)).into_response()
+    if auth_status == AUTH_STATUS_PENDING {
+        let pending_count = match inbound_connections::Entity::find()
+            .filter(inbound_connections::Column::AuthStatus.eq(AUTH_STATUS_PENDING))
+            .count(&state.db)
+            .await
+        {
+            Ok(count) => count,
+            Err(e) => {
+                log::error!("count pending inbound connections failed: {e}");
+                1
+            }
+        };
+        crate::app::ui::tray::update_connect_device_menu_pending_count(&state.app, pending_count);
+        crate::app::events::emit_inbound_requested(
+            &state.app,
+            vec![payload.user_id.trim().to_string()],
+            "inbound_connection_pending",
+        );
+        let config = state
+            .app
+            .state::<crate::app::config::AppConfigStore>()
+            .get();
+        if config.popup_on_inbound_request {
+            let _ = crate::app::ui::window::open_or_create_window(
+                &state.app,
+                crate::models::window::WindowLabel::ShareFile,
+            );
+        }
+    }
+
+    Json(connection_status_body(auth_status, &config)).into_response()
 }
 
 async fn connection_status(
@@ -271,9 +360,14 @@ async fn connection_status(
             )
         }
     };
+    let config = state
+        .app
+        .state::<crate::app::config::AppConfigStore>()
+        .get();
     Json(connection_status_body(
         row.map(|row| row.auth_status)
             .unwrap_or(AUTH_STATUS_UNAUTHENTICATED),
+        &config,
     ))
     .into_response()
 }
@@ -300,6 +394,78 @@ async fn list_client_shares(State(state): State<HttpState>, headers: HeaderMap) 
     };
 
     Json(rows.into_iter().map(remote_share_item).collect::<Vec<_>>()).into_response()
+}
+
+async fn list_client_clipboard(
+    State(state): State<HttpState>,
+    Query(query): Query<IndexQuery>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(response) = authorize_client_request(&state, &headers).await {
+        return response;
+    }
+
+    let page = query.page.unwrap_or(1).max(1);
+    let page_size = query.page_size.unwrap_or(20).clamp(1, 100);
+    let offset = (page - 1) * page_size;
+    let rows = match clipboard_record::Entity::find()
+        .filter(clipboard_record::Column::IsShared.eq(1))
+        .order_by_desc(clipboard_record::Column::IsFavorite)
+        .order_by_desc(clipboard_record::Column::LastAccessedAt)
+        .order_by_desc(clipboard_record::Column::CreatedAt)
+        .offset(offset)
+        .limit(page_size)
+        .all(&state.db)
+        .await
+    {
+        Ok(rows) => rows,
+        Err(e) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("database error: {e}"),
+            )
+        }
+    };
+
+    Json(
+        rows.into_iter()
+            .map(crate::db::service::clipboard::clipboard_response_from_model)
+            .collect::<Vec<_>>(),
+    )
+    .into_response()
+}
+
+async fn get_client_clipboard_content(
+    State(state): State<HttpState>,
+    AxumPath(id): AxumPath<i32>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(response) = authorize_client_request(&state, &headers).await {
+        return response;
+    }
+
+    let row = match clipboard_record::Entity::find_by_id(id)
+        .one(&state.db)
+        .await
+    {
+        Ok(Some(row)) => row,
+        Ok(None) => return json_error(StatusCode::NOT_FOUND, "clipboard record not found"),
+        Err(e) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("database error: {e}"),
+            )
+        }
+    };
+    if row.is_shared != 1 {
+        return json_error(StatusCode::NOT_FOUND, "clipboard record not found");
+    }
+
+    let content = match clipboard_content_response(&state.db, &row).await {
+        Ok(content) => content,
+        Err(e) => return json_error(StatusCode::BAD_REQUEST, e),
+    };
+    Json(content).into_response()
 }
 
 async fn list_client_files(
@@ -538,6 +704,10 @@ async fn download_share_file(
     Query(query): Query<RelativePathQuery>,
     headers: HeaderMap,
 ) -> Response {
+    if let Err(response) = super::authorize_browser_request(&state, &headers) {
+        return response;
+    }
+
     serve_share_file(state, id, query, headers).await
 }
 
@@ -674,6 +844,171 @@ fn remote_share_item(row: local_files::Model) -> RemoteShareItem {
     }
 }
 
+async fn clipboard_content_response(
+    db: &DatabaseConnection,
+    record: &clipboard_record::Model,
+) -> Result<ClipboardContentResponse, String> {
+    let mut response = ClipboardContentResponse {
+        id: record.id,
+        r#type: record.r#type,
+        text: None,
+        html: None,
+        rtf: None,
+        image_base64: None,
+        files: None,
+        sync_targets: None,
+    };
+
+    if record.r#type == ClipboardType::Text as i32 {
+        response.text = Some(bytes_to_string(record.data.clone())?);
+    } else if record.r#type == ClipboardType::Html as i32 {
+        response.html = Some(bytes_to_string(record.data.clone())?);
+    } else if record.r#type == ClipboardType::Rtf as i32 {
+        response.rtf = Some(bytes_to_string(record.data.clone())?);
+    } else if record.r#type == ClipboardType::Image as i32 {
+        let path = bytes_to_string(record.data.clone())?;
+        let bytes = tokio::fs::read(normalize_file_uri(&path))
+            .await
+            .map_err(|e| format!("failed to read image: {e}"))?;
+        response.image_base64 = Some(base64::Engine::encode(
+            &base64::engine::general_purpose::STANDARD,
+            bytes,
+        ));
+    } else if record.r#type == ClipboardType::File as i32
+        || record.r#type == ClipboardType::Folder as i32
+    {
+        let text = bytes_to_string(record.data.clone())?;
+        let files = serde_json::from_str::<Vec<String>>(&text)
+            .map_err(|e| format!("failed to parse file list: {e}"))?;
+        response.sync_targets = Some(clipboard_file_sync_targets(db, record.id, &files).await?);
+        response.files = Some(files);
+    }
+
+    Ok(response)
+}
+
+async fn clipboard_file_sync_targets(
+    db: &DatabaseConnection,
+    clipboard_id: i32,
+    files: &[String],
+) -> Result<Vec<ClipboardFileSyncTarget>, String> {
+    let mut targets = Vec::new();
+    for raw in files {
+        if let Some(share) = find_local_share_for_clipboard_path(db, clipboard_id, raw).await? {
+            targets.push(clipboard_sync_target_for_share(db, share).await?);
+        }
+    }
+    Ok(targets)
+}
+
+async fn find_local_share_for_clipboard_path(
+    db: &DatabaseConnection,
+    clipboard_id: i32,
+    raw_path: &str,
+) -> Result<Option<local_files::Model>, String> {
+    let path = PathBuf::from(normalize_file_uri(raw_path));
+    let canonical = std::fs::canonicalize(&path).unwrap_or(path);
+    let path_text = canonical.to_string_lossy().to_string();
+
+    if let Some(row) = local_files::Entity::find()
+        .filter(local_files::Column::IsValid.eq(1))
+        .filter(local_files::Column::Path.eq(path_text.clone()))
+        .one(db)
+        .await
+        .map_err(|e| format!("database error: {e}"))?
+    {
+        if local_share_matches_clipboard(&row, clipboard_id) {
+            return Ok(Some(row));
+        }
+    }
+
+    let candidates = local_files::Entity::find()
+        .filter(local_files::Column::IsValid.eq(1))
+        .filter(local_files::Column::SourceClipboardId.is_not_null())
+        .all(db)
+        .await
+        .map_err(|e| format!("database error: {e}"))?;
+
+    Ok(candidates.into_iter().find(|row| {
+        local_share_matches_clipboard(row, clipboard_id) && path_text_matches(&row.path, &path_text)
+    }))
+}
+
+fn local_share_matches_clipboard(row: &local_files::Model, clipboard_id: i32) -> bool {
+    has_clipboard_source(row.source_type)
+        && parse_source_clipboard_ids(row.source_clipboard_id.as_deref()).contains(&clipboard_id)
+}
+
+async fn clipboard_sync_target_for_share(
+    db: &DatabaseConnection,
+    share: local_files::Model,
+) -> Result<ClipboardFileSyncTarget, String> {
+    let root_index =
+        local_file_index::Entity::find_by_id((share.id.clone(), ROOT_RELATIVE_PATH.to_string()))
+            .one(db)
+            .await
+            .map_err(|e| format!("database error: {e}"))?;
+
+    let path = Path::new(&share.path);
+    let metadata = std::fs::metadata(path).ok();
+    let name = path
+        .file_name()
+        .map(|value| value.to_string_lossy().to_string())
+        .unwrap_or_else(|| share.path.clone());
+    let is_dir = metadata
+        .as_ref()
+        .map(|metadata| metadata.is_dir())
+        .unwrap_or(share.r#type == 1);
+    let fallback_size = metadata.as_ref().and_then(|metadata| {
+        if metadata.is_file() {
+            Some(metadata.len() as i64)
+        } else {
+            None
+        }
+    });
+    let fallback_mtime = metadata
+        .as_ref()
+        .and_then(|metadata| metadata.modified().ok())
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|duration| duration.as_secs() as i64);
+
+    Ok(ClipboardFileSyncTarget {
+        share_id: share.id,
+        share_name: name.clone(),
+        relative_path: ROOT_RELATIVE_PATH.to_string(),
+        name,
+        is_dir,
+        size: root_index
+            .as_ref()
+            .map(|index| index.size)
+            .or(share.size)
+            .or(fallback_size),
+        mtime: root_index
+            .as_ref()
+            .map(|index| index.mtime)
+            .or(fallback_mtime),
+        hash: root_index.and_then(|index| index.hash),
+    })
+}
+
+fn path_text_matches(left: &str, right: &str) -> bool {
+    normalize_for_path_compare(left) == normalize_for_path_compare(right)
+}
+
+fn normalize_for_path_compare(path: &str) -> String {
+    let mut path = normalize_file_uri(path).replace('/', "\\");
+    if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
+        path = format!(r"\\{rest}");
+    } else if let Some(rest) = path.strip_prefix(r"\\?\") {
+        path = rest.to_string();
+    }
+    path.trim_end_matches('\\').to_ascii_lowercase()
+}
+
+fn bytes_to_string(data: Option<Vec<u8>>) -> Result<String, String> {
+    String::from_utf8(data.unwrap_or_default()).map_err(|e| format!("invalid utf8 data: {e}"))
+}
+
 fn index_item(row: local_file_index::Model) -> SyncIndexItem {
     SyncIndexItem {
         name: name_from_relative_path(&row.relative_path),
@@ -702,6 +1037,12 @@ fn path_to_node(root: &std::path::Path, path: &std::path::Path) -> FileNode {
         relative_path: crate::server::share::relative_path_for(root, path),
         is_dir,
         size,
+        mtime: metadata
+            .as_ref()
+            .and_then(|m| m.modified().ok())
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|duration| duration.as_secs() as i64),
+        hash: None,
     }
 }
 
@@ -795,7 +1136,10 @@ async fn authorize_client_request(state: &HttpState, headers: &HeaderMap) -> Res
     Ok(())
 }
 
-fn connection_status_body(auth_status: i32) -> ConnectionStatusResponse {
+fn connection_status_body(
+    auth_status: i32,
+    config: &crate::app::config::AppConfig,
+) -> ConnectionStatusResponse {
     let message = match auth_status {
         AUTH_STATUS_PENDING => "waiting for approval",
         AUTH_STATUS_APPROVED => "approved",
@@ -807,5 +1151,7 @@ fn connection_status_body(auth_status: i32) -> ConnectionStatusResponse {
         message: message.to_string(),
         poll_after_ms: 2000,
         auth_token: None,
+        device_id: config.local_device_id.clone(),
+        device_name: config.local_device_name.clone(),
     }
 }

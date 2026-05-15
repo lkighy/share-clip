@@ -53,6 +53,15 @@ pub fn run() {
             init_app(app);
             init_register_shortcut(&app.handle());
             init_menu(app);
+            let pending_count = tauri::async_runtime::block_on(async {
+                use sea_orm::{ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter};
+                entity::inbound_connections::Entity::find()
+                    .filter(entity::inbound_connections::Column::AuthStatus.eq(1))
+                    .count(&app.state::<DbState>().conn)
+                    .await
+                    .unwrap_or(0)
+            });
+            app::ui::tray::update_connect_device_menu_pending_count(&app.handle(), pending_count);
 
             let app_handle = app.handle().clone();
             let shutdown = start_clipboard_watcher(app_handle);
@@ -60,9 +69,11 @@ pub fn run() {
 
             if config.auto_start_share_server {
                 let server_state = app.state::<server::ServerState>();
-                if let Err(e) =
-                    server_state.start(&config.share_server_bind_ip, config.share_server_port)
-                {
+                if let Err(e) = server_state.start(
+                    &config.share_server_bind_ip,
+                    config.share_server_port,
+                    app.handle().clone(),
+                ) {
                     error!("start share server failed: {}", e);
                 }
                 app::ui::tray::update_share_server_menu_label(&app.handle());
@@ -75,11 +86,14 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             clipboard::clipboard_record_list,
             clipboard::paste_clipboard_record,
+            clipboard::paste_remote_clipboard_content,
             clipboard::copy_clipboard_record,
+            clipboard::copy_remote_clipboard_content,
             clipboard::toggle_favorite,
             clipboard::toggle_share,
             clipboard::delete_clipboard_record,
             config_commands::get_app_config,
+            config_commands::get_local_device_info,
             config_commands::update_app_config,
             config_commands::get_share_server_ip_options,
             server_commands::start_share_server,
@@ -98,6 +112,11 @@ pub fn run() {
             share_files_commands::unshare_local_shared_file,
             share_files_commands::add_manual_shared_paths,
             share_files_commands::refresh_local_share_indexes,
+            share_files_commands::get_remote_cache_status,
+            share_files_commands::list_remote_cached_files,
+            share_files_commands::cache_remote_shared_file,
+            share_files_commands::reveal_remote_shared_cache,
+            share_files_commands::remove_remote_shared_cache,
             window::operation_window,
         ])
         .run(tauri::generate_context!())

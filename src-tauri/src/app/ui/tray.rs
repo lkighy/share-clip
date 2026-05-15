@@ -3,10 +3,11 @@ use crate::app::ui::window::open_or_create_window;
 use crate::models::window::WindowLabel;
 use tauri::menu::{MenuBuilder, MenuItem, MenuItemBuilder};
 use tauri::tray::TrayIconBuilder;
-use tauri::{App, AppHandle, Manager, Wry};
+use tauri::{App, AppHandle, Emitter, Manager, Wry};
 
 pub struct TrayMenuState {
     share_server_item: MenuItem<Wry>,
+    connect_device_item: MenuItem<Wry>,
 }
 
 pub fn update_share_server_menu_label(app: &AppHandle) {
@@ -22,6 +23,17 @@ pub fn update_share_server_menu_label(app: &AppHandle) {
     }
 }
 
+pub fn update_connect_device_menu_pending_count(app: &AppHandle, count: u64) {
+    if let Some(menu_state) = app.try_state::<TrayMenuState>() {
+        let text = if count > 0 {
+            format!("连接设备... ({count})")
+        } else {
+            "连接设备...".to_string()
+        };
+        let _ = menu_state.connect_device_item.set_text(text);
+    }
+}
+
 pub fn init_menu(app: &App) {
     let clipboard_item = MenuItemBuilder::with_id("index", "剪贴板")
         .build(app)
@@ -29,6 +41,9 @@ pub fn init_menu(app: &App) {
     let shared_files_item = MenuItemBuilder::with_id("shared-files", "分享文件")
         .build(app)
         .expect("创建菜单项 - 分享文件失败");
+    let connect_device_item = MenuItemBuilder::with_id("connect-device", "连接设备...")
+        .build(app)
+        .expect("创建菜单项 - 连接设备失败");
     let app_config_item = MenuItemBuilder::with_id("app-config", "设置")
         .build(app)
         .expect("创建菜单项 - 设置失败");
@@ -52,12 +67,14 @@ pub fn init_menu(app: &App) {
 
     app.manage(TrayMenuState {
         share_server_item: share_server_item.clone(),
+        connect_device_item: connect_device_item.clone(),
     });
 
     let menu = MenuBuilder::new(app)
         .items(&[
             &clipboard_item,
             &shared_files_item,
+            &connect_device_item,
             &app_config_item,
             &share_server_item,
             &quit_item,
@@ -100,6 +117,15 @@ pub fn init_menu(app: &App) {
                     println!("{}", e);
                 }
             }
+            "connect-device" => {
+                if let Err(e) = open_or_create_window(app, WindowLabel::ShareFile) {
+                    println!("{}", e);
+                    return;
+                }
+                if let Some(window) = app.get_window(WindowLabel::ShareFile.label()) {
+                    let _ = window.emit("share://open-device-tab", ());
+                }
+            }
             "app-config" => {
                 if let Err(e) = open_or_create_window(app, WindowLabel::Config) {
                     // TODO: 添加 log
@@ -116,9 +142,11 @@ pub fn init_menu(app: &App) {
                     }
                     Ok(false) => {
                         let config = app.state::<AppConfigStore>().get();
-                        if let Err(e) =
-                            state.start(&config.share_server_bind_ip, config.share_server_port)
-                        {
+                        if let Err(e) = state.start(
+                            &config.share_server_bind_ip,
+                            config.share_server_port,
+                            app.clone(),
+                        ) {
                             println!("{}", e);
                         }
                     }

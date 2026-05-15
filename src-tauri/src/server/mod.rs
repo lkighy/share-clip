@@ -6,6 +6,7 @@ pub(crate) mod sync;
 use std::sync::Mutex;
 
 use sea_orm::DatabaseConnection;
+use tauri::AppHandle;
 
 pub struct ServerState {
     pub db: DatabaseConnection,
@@ -20,7 +21,7 @@ impl ServerState {
         }
     }
 
-    pub fn start(&self, bind_ip: &str, port: u16) -> Result<(), String> {
+    pub fn start(&self, bind_ip: &str, port: u16, app_handle: AppHandle) -> Result<(), String> {
         let mut guard = self
             .controller
             .lock()
@@ -30,7 +31,8 @@ impl ServerState {
             return Err("server is already running".to_string());
         }
 
-        let controller = service::ServerController::start(bind_ip, port, self.db.clone())?;
+        let controller =
+            service::ServerController::start(bind_ip, port, self.db.clone(), app_handle)?;
         *guard = Some(controller);
         Ok(())
     }

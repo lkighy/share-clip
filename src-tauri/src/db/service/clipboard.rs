@@ -39,7 +39,7 @@ pub async fn list_records(
         .collect())
 }
 
-fn clipboard_response_from_model(record: Model) -> ClipboardResponse {
+pub fn clipboard_response_from_model(record: Model) -> ClipboardResponse {
     let file_items = build_clipboard_file_items(&record);
     ClipboardResponse {
         id: record.id,

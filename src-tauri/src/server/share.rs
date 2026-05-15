@@ -42,7 +42,11 @@ pub fn resolve_share_path(root: &Path, relative_path: Option<&str>) -> Result<Pa
         }
     }
 
-    let joined = root.join(normalized);
+    let joined = if normalized.as_os_str().is_empty() {
+        root.clone()
+    } else {
+        root.join(normalized)
+    };
     let canonical = canonicalize_existing(&joined).map_err(|_| "path not found".to_string())?;
     if !canonical.starts_with(&root) {
         return Err("path is outside share root".to_string());

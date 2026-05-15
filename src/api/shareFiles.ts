@@ -39,6 +39,7 @@ export function upsertRemoteShareUser(payload: {
   user_name: string;
   ip: string;
   password?: string | null;
+  device_id?: string | null;
 }) {
   return call<RemoteShareUser>("upsert_remote_share_user", { payload });
 }
@@ -92,4 +93,79 @@ export function addManualSharedPaths(paths: string[]) {
 
 export function refreshLocalShareIndexes() {
   return call<void>("refresh_local_share_indexes");
+}
+
+export type RemoteCacheStatus = {
+  cached: boolean;
+  local_cache_path?: string | null;
+  size?: number | null;
+  mtime?: number | null;
+  hash?: string | null;
+  updated_at?: number | null;
+};
+
+export type RemoteCachedFileItem = {
+  remote_user_id: string;
+  share_id: string;
+  share_name: string;
+  relative_path: string;
+  name: string;
+  is_dir: boolean;
+  size?: number | null;
+  mtime?: number | null;
+  hash?: string | null;
+  local_cache_path?: string | null;
+  remote_deleted: boolean;
+  cache_status: number;
+  updated_at?: number | null;
+};
+
+export function getRemoteCacheStatus(payload: {
+  remote_user_id: string;
+  share_id: string;
+  relative_path: string;
+  size?: number | null;
+  mtime?: number | null;
+  hash?: string | null;
+}) {
+  return call<RemoteCacheStatus>("get_remote_cache_status", { payload });
+}
+
+export function listRemoteCachedFiles(payload: {
+  remote_user_id: string;
+  share_id?: string | null;
+  path?: string | null;
+}) {
+  return call<RemoteCachedFileItem[]>("list_remote_cached_files", { payload });
+}
+
+export function cacheRemoteSharedFile(payload: {
+  remote_user_id: string;
+  share_id: string;
+  share_name: string;
+  relative_path: string;
+  name: string;
+  is_dir: boolean;
+  size?: number | null;
+  mtime?: number | null;
+  hash?: string | null;
+  data_base64?: string | null;
+}) {
+  return call<string>("cache_remote_shared_file", { payload });
+}
+
+export function revealRemoteSharedCache(payload: {
+  remote_user_id: string;
+  share_id: string;
+  relative_path: string;
+}) {
+  return call<void>("reveal_remote_shared_cache", { payload });
+}
+
+export function removeRemoteSharedCache(payload: {
+  remote_user_id: string;
+  share_id: string;
+  relative_path: string;
+}) {
+  return call<void>("remove_remote_shared_cache", { payload });
 }

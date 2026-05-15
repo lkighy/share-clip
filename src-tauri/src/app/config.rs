@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io;
 use std::path::PathBuf;
+use std::process::Command;
 
 use parking_lot::RwLock;
 
@@ -10,6 +11,10 @@ const APP_IDENTIFIER: &str = "com.lkighy.share-clip";
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppConfig {
+    // 本机设备稳定 ID，用于远程设备识别
+    pub local_device_id: String,
+    // 本机设备显示名称，可由用户修改
+    pub local_device_name: String,
     #[serde(alias = "hotkey")]
     pub shortcut: String,
     pub clipboard_window_width: i32,
@@ -52,10 +57,14 @@ pub struct AppConfig {
     pub browser_access_enabled: bool,
     // 是否允许客户端同步访问
     pub sync_access_enabled: bool,
+    // 收到连接申请时是否主动弹出确认浮窗
+    pub popup_on_inbound_request: bool,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct AppConfigUpdate {
+    pub local_device_id: Option<String>,
+    pub local_device_name: Option<String>,
     pub shortcut: Option<String>,
     pub clipboard_window_width: Option<i32>,
     pub clipboard_window_height: Option<i32>,
@@ -80,10 +89,23 @@ pub struct AppConfigUpdate {
     pub share_server_auth_mode: Option<i32>,
     pub browser_access_enabled: Option<bool>,
     pub sync_access_enabled: Option<bool>,
+    pub popup_on_inbound_request: Option<bool>,
 }
 
 impl AppConfigUpdate {
     pub fn apply(self, config: &mut AppConfig) {
+        if let Some(value) = self.local_device_id {
+            let value = value.trim();
+            if !value.is_empty() {
+                config.local_device_id = value.to_string();
+            }
+        }
+        if let Some(value) = self.local_device_name {
+            let value = value.trim();
+            if !value.is_empty() {
+                config.local_device_name = value.to_string();
+            }
+        }
         if let Some(value) = self.shortcut {
             config.shortcut = value;
         }
@@ -150,12 +172,17 @@ impl AppConfigUpdate {
         if let Some(value) = self.sync_access_enabled {
             config.sync_access_enabled = value;
         }
+        if let Some(value) = self.popup_on_inbound_request {
+            config.popup_on_inbound_request = value;
+        }
     }
 }
 
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
+            local_device_id: default_device_id(),
+            local_device_name: default_device_name(),
             shortcut: "f4".to_string(),
             clipboard_window_width: 420,
             clipboard_window_height: 640,
@@ -178,8 +205,87 @@ impl Default for AppConfig {
             share_server_auth_mode: 1,
             browser_access_enabled: true,
             sync_access_enabled: true,
+            popup_on_inbound_request: false,
         }
     }
+}
+
+fn default_device_name() -> String {
+    std::env::var("COMPUTERNAME")
+        .or_else(|_| std::env::var("HOSTNAME"))
+        .or_else(|_| std::env::var("USERNAME"))
+        .or_else(|_| std::env::var("USER"))
+        .map(|value| value.trim().to_string())
+        .ok()
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "本机设备".to_string())
+}
+
+fn default_device_id() -> String {
+    let parts = [
+        APP_IDENTIFIER.to_string(),
+        machine_fingerprint().unwrap_or_default(),
+        std::env::consts::OS.to_string(),
+        std::env::consts::ARCH.to_string(),
+        default_device_name(),
+        std::env::var("USERNAME").unwrap_or_default(),
+        std::env::var("USER").unwrap_or_default(),
+        std::env::var("USERPROFILE").unwrap_or_default(),
+        std::env::var("HOME").unwrap_or_default(),
+    ];
+    let input = parts.join("|");
+    let hash = blake3::hash(input.as_bytes()).to_hex().to_string();
+    format!("device-{}", &hash[..20])
+}
+
+fn machine_fingerprint() -> Option<String> {
+    if cfg!(target_os = "windows") {
+        return Command::new("reg")
+            .args([
+                "query",
+                r"HKLM\SOFTWARE\Microsoft\Cryptography",
+                "/v",
+                "MachineGuid",
+            ])
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+            .and_then(|output| String::from_utf8(output.stdout).ok())
+            .and_then(|text| {
+                text.lines()
+                    .find(|line| line.contains("MachineGuid"))
+                    .and_then(|line| line.split_whitespace().last())
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(ToOwned::to_owned)
+            });
+    }
+
+    if cfg!(target_os = "macos") {
+        return Command::new("ioreg")
+            .args(["-rd1", "-c", "IOPlatformExpertDevice"])
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+            .and_then(|output| String::from_utf8(output.stdout).ok())
+            .and_then(|text| {
+                text.lines()
+                    .find(|line| line.contains("IOPlatformUUID"))
+                    .and_then(|line| line.split('"').nth(3))
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(ToOwned::to_owned)
+            });
+    }
+
+    ["/etc/machine-id", "/var/lib/dbus/machine-id"]
+        .into_iter()
+        .find_map(|path| {
+            fs::read_to_string(path)
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+        })
 }
 
 fn default_cache_dir() -> String {
@@ -232,6 +338,7 @@ pub fn load_or_create_config() -> AppConfig {
 
     if let Ok(content) = fs::read_to_string(&path) {
         if let Ok(config) = toml::from_str::<AppConfig>(&content) {
+            let _ = update_config_file(&config);
             return config;
         }
     }

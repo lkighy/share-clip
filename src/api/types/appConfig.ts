@@ -1,4 +1,6 @@
 export type AppConfig = {
+  local_device_id: string;
+  local_device_name: string;
   shortcut: string;
   clipboard_window_width: number;
   clipboard_window_height: number;
@@ -21,6 +23,7 @@ export type AppConfig = {
   share_server_auth_mode: number;
   browser_access_enabled: boolean;
   sync_access_enabled: boolean;
+  popup_on_inbound_request: boolean;
 };
 
 export type AppConfigUpdate = Partial<AppConfig> & {

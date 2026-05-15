@@ -12,3 +12,12 @@ export function updateAppConfig(payload: AppConfigUpdate) {
 export function getShareServerIpOptions() {
   return call<string[]>("get_share_server_ip_options");
 }
+
+export type LocalDeviceInfo = {
+  device_id: string;
+  device_name: string;
+};
+
+export function getLocalDeviceInfo() {
+  return call<LocalDeviceInfo>("get_local_device_info");
+}

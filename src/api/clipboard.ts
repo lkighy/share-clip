@@ -32,3 +32,35 @@ export function toggleShare(id: number) {
 export function deleteClipboardRecord(id: number) {
     return call("delete_clipboard_record", {id})
 }
+
+export type RemoteClipboardContent = {
+    id: number;
+    type: number;
+    text?: string | null;
+    html?: string | null;
+    rtf?: string | null;
+    image_base64?: string | null;
+    files?: string[] | null;
+    sync_targets?: RemoteClipboardSyncTarget[] | null;
+}
+
+export type RemoteClipboardSyncTarget = {
+    share_id: string;
+    share_name: string;
+    relative_path: string;
+    name: string;
+    is_dir: boolean;
+    size?: number | null;
+    mtime?: number | null;
+    hash?: string | null;
+}
+
+export type RemoteClipboardContentPayload = Omit<RemoteClipboardContent, "id" | "sync_targets">;
+
+export function copyRemoteClipboardContent(payload: RemoteClipboardContentPayload) {
+    return call<void>("copy_remote_clipboard_content", {payload})
+}
+
+export function pasteRemoteClipboardContent(payload: RemoteClipboardContentPayload) {
+    return call<void>("paste_remote_clipboard_content", {payload})
+}

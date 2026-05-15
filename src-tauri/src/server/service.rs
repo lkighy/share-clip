@@ -1,6 +1,7 @@
 use sea_orm::DatabaseConnection;
 use std::sync::mpsc;
 use std::{net::SocketAddr, thread};
+use tauri::AppHandle;
 use tokio::runtime::Runtime;
 use tokio::sync::oneshot;
 
@@ -10,7 +11,12 @@ pub struct ServerController {
 }
 
 impl ServerController {
-    pub fn start(bind_ip: &str, port: u16, db: DatabaseConnection) -> Result<Self, String> {
+    pub fn start(
+        bind_ip: &str,
+        port: u16,
+        db: DatabaseConnection,
+        app_handle: AppHandle,
+    ) -> Result<Self, String> {
         let (stop_tx, stop_rx) = oneshot::channel();
         let (ready_tx, ready_rx) = mpsc::channel::<Result<(), String>>();
         let bind_ip = bind_ip.to_string();
@@ -46,7 +52,10 @@ impl ServerController {
                 };
 
                 let sync_db = db.clone();
-                let app = crate::server::routes::router(crate::server::routes::HttpState { db });
+                let app = crate::server::routes::router(crate::server::routes::HttpState {
+                    db,
+                    app: app_handle,
+                });
                 let sync_runtime = crate::server::sync::start(sync_db).await;
                 let _ = ready_tx.send(Ok(()));
 

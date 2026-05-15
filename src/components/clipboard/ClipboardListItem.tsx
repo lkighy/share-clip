@@ -262,42 +262,45 @@ export const ClipboardListItem: React.FC<ClipboardListItemProps> = ({
 
                 {/* 右侧操作按钮 */}
                 <div className="flex items-center gap-1">
-                  {/* 收藏按钮 - 即使失效也可切换收藏状态？根据业务决定，这里保留 */}
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-7 w-7 rounded-md hover:bg-slate-100"
-                          onClick={handleFavorite}
-                          aria-label={isFavorite ? '取消收藏' : '收藏'}
-                          disabled={!isValid} // 可选：失效时禁用收藏
-                      >
-                        <Star size={14} className={isFavorite ? 'fill-yellow-500 text-yellow-500' : ''} />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      <p>{isFavorite ? '取消收藏' : '收藏'}</p>
-                    </TooltipContent>
-                  </Tooltip>
+                  {onFavoriteToggle ? (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7 rounded-md hover:bg-slate-100"
+                            onClick={handleFavorite}
+                            aria-label={isFavorite ? '取消收藏' : '收藏'}
+                            disabled={!isValid}
+                        >
+                          <Star size={14} className={isFavorite ? 'fill-yellow-500 text-yellow-500' : ''} />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p>{isFavorite ? '取消收藏' : '收藏'}</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  ) : null}
 
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-7 w-7 rounded-md hover:bg-slate-100"
-                          onClick={handleShare}
-                          aria-label={isShared ? '取消分享' : '分享'}
-                          disabled={!isValid} // 可选：失效时禁用收藏
-                      >
-                        <Share size={14} className={isShared ? 'fill-yellow-500 text-yellow-500' : ''} />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      <p>{isShared ? '取消分享' : '分享'}</p>
-                    </TooltipContent>
-                  </Tooltip>
+                  {onShareToggle ? (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7 rounded-md hover:bg-slate-100"
+                            onClick={handleShare}
+                            aria-label={isShared ? '取消分享' : '分享'}
+                            disabled={!isValid}
+                        >
+                          <Share size={14} className={isShared ? 'fill-yellow-500 text-yellow-500' : ''} />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p>{isShared ? '取消分享' : '分享'}</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  ) : null}
 
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
@@ -306,14 +309,16 @@ export const ClipboardListItem: React.FC<ClipboardListItemProps> = ({
                       </Button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
-                      <DropdownMenuItem
-                          onClick={handleCopy}
-                          disabled={!isValid} // 失效时禁用复制
-                          className={!isValid ? 'opacity-50 cursor-not-allowed' : ''}
-                      >
-                        <Copy size={14} className="mr-2" />
-                        复制内容
-                      </DropdownMenuItem>
+                      {onCopy ? (
+                        <DropdownMenuItem
+                            onClick={handleCopy}
+                            disabled={!isValid}
+                            className={!isValid ? 'opacity-50 cursor-not-allowed' : ''}
+                        >
+                          <Copy size={14} className="mr-2" />
+                          复制内容
+                        </DropdownMenuItem>
+                      ) : null}
                       {/*<DropdownMenuItem*/}
                       {/*    onClick={handleShare}*/}
                       {/*    disabled={!isValid} // 失效时禁用分享*/}
@@ -322,14 +327,15 @@ export const ClipboardListItem: React.FC<ClipboardListItemProps> = ({
                       {/*  <Share size={14} className="mr-2" />*/}
                       {/*  {isShared ? '取消分享' : '分享'}*/}
                       {/*</DropdownMenuItem>*/}
-                      <DropdownMenuItem
-                          onClick={handleDelete}
-                          className="text-destructive focus:text-destructive"
-                          // 删除功能始终可用，以便清理无效数据
-                      >
-                        <Trash2 size={14} className="mr-2" />
-                        删除
-                      </DropdownMenuItem>
+                      {onDelete ? (
+                        <DropdownMenuItem
+                            onClick={handleDelete}
+                            className="text-destructive focus:text-destructive"
+                        >
+                          <Trash2 size={14} className="mr-2" />
+                          删除
+                        </DropdownMenuItem>
+                      ) : null}
                     </DropdownMenuContent>
                   </DropdownMenu>
                 </div>

@@ -13,6 +13,15 @@ pub fn get_app_config(app: tauri::AppHandle) -> Result<AppConfig, ApiError> {
 }
 
 #[tauri::command]
+pub fn get_local_device_info(app: tauri::AppHandle) -> Result<serde_json::Value, ApiError> {
+    let config = app.state::<AppConfigStore>().get();
+    Ok(serde_json::json!({
+        "device_id": config.local_device_id,
+        "device_name": config.local_device_name,
+    }))
+}
+
+#[tauri::command]
 pub fn update_app_config(
     app: tauri::AppHandle,
     payload: AppConfigUpdate,
@@ -46,7 +55,11 @@ pub fn update_app_config(
     if was_running && server_bind_changed {
         let _ = server_state.stop();
         server_state
-            .start(&updated.share_server_bind_ip, updated.share_server_port)
+            .start(
+                &updated.share_server_bind_ip,
+                updated.share_server_port,
+                app.clone(),
+            )
             .map_err(AppError::InvalidInput)?;
     }
     crate::app::ui::tray::update_share_server_menu_label(&app);

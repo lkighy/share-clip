@@ -5,6 +5,7 @@ use crate::entity::clipboard_record;
 use crate::error::{ApiError, AppError};
 use crate::models::clipboard::{ClipboardResponse, ClipboardType};
 use crate::platform::automation::{Automation, InjectContent};
+use base64::Engine;
 use html2text::from_read;
 use log::{error, info};
 use std::path::PathBuf;
@@ -27,6 +28,107 @@ pub async fn clipboard_record_list(
             AppError::from(e)
         })?;
     Ok(records)
+}
+
+#[derive(serde::Deserialize)]
+pub struct RemoteClipboardContentPayload {
+    pub r#type: i32,
+    pub text: Option<String>,
+    pub html: Option<String>,
+    pub rtf: Option<String>,
+    pub image_base64: Option<String>,
+    pub files: Option<Vec<String>>,
+}
+
+#[tauri::command]
+pub async fn paste_remote_clipboard_content(
+    payload: RemoteClipboardContentPayload,
+) -> Result<(), ApiError> {
+    let content = inject_content_from_remote_payload(payload)?;
+    let mut auto = Automation::new();
+    crate::services::clipboard_watcher::suppress_next_clipboard_changes(1, Duration::from_secs(2));
+    if let Err(e) = auto.inject(content) {
+        crate::services::clipboard_watcher::clear_suppressed_clipboard_changes();
+        return Err(AppError::from(e).into());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn copy_remote_clipboard_content(
+    payload: RemoteClipboardContentPayload,
+) -> Result<(), ApiError> {
+    let content = inject_content_from_remote_payload(payload)?;
+    copy_inject_content_to_clipboard(content).await
+}
+
+fn inject_content_from_remote_payload(
+    payload: RemoteClipboardContentPayload,
+) -> Result<InjectContent, ApiError> {
+    if payload.r#type == ClipboardType::Text as i32 {
+        return Ok(InjectContent::Text(payload.text.unwrap_or_default()));
+    }
+    if payload.r#type == ClipboardType::Html as i32 {
+        return Ok(InjectContent::Html(payload.html.unwrap_or_default()));
+    }
+    if payload.r#type == ClipboardType::Rtf as i32 {
+        return Ok(InjectContent::Rtf(payload.rtf.unwrap_or_default()));
+    }
+    if payload.r#type == ClipboardType::Image as i32 {
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(payload.image_base64.unwrap_or_default())
+            .map_err(|e| AppError::InvalidInput(format!("无效图片数据: {e}")))?;
+        return Ok(InjectContent::Image(bytes));
+    }
+    if payload.r#type == ClipboardType::File as i32
+        || payload.r#type == ClipboardType::Folder as i32
+    {
+        return Ok(InjectContent::Files(
+            payload
+                .files
+                .unwrap_or_default()
+                .into_iter()
+                .map(PathBuf::from)
+                .collect(),
+        ));
+    }
+    Err(AppError::InvalidInput("不支持的远程剪贴板类型".to_string()).into())
+}
+
+async fn copy_inject_content_to_clipboard(content: InjectContent) -> Result<(), ApiError> {
+    match content {
+        InjectContent::Text(text) => tauri_plugin_clipboard_x::write_text(text)
+            .await
+            .map_err(|e| AppError::InvalidInput(e.to_string()).into()),
+        InjectContent::Html(html) => {
+            let text = from_read(html.as_bytes(), usize::MAX);
+            tauri_plugin_clipboard_x::write_html(text, html)
+                .await
+                .map_err(|e| AppError::InvalidInput(e.to_string()).into())
+        }
+        InjectContent::Rtf(rtf) => tauri_plugin_clipboard_x::write_rtf(String::new(), rtf)
+            .await
+            .map_err(|e| AppError::InvalidInput(e.to_string()).into()),
+        InjectContent::Files(files) => {
+            let files = files
+                .into_iter()
+                .map(|path| path.to_string_lossy().to_string())
+                .collect::<Vec<_>>();
+            tauri_plugin_clipboard_x::write_files(files)
+                .await
+                .map_err(|e| AppError::InvalidInput(e.to_string()).into())
+        }
+        InjectContent::Image(bytes) => {
+            let cache_path = std::env::temp_dir().join(format!(
+                "share-clip-remote-{}.png",
+                chrono::Utc::now().timestamp_millis()
+            ));
+            std::fs::write(&cache_path, bytes).map_err(AppError::from)?;
+            tauri_plugin_clipboard_x::write_image(cache_path.to_string_lossy().to_string())
+                .await
+                .map_err(|e| AppError::InvalidInput(e.to_string()).into())
+        }
+    }
 }
 
 /// 查询剪切板数据的接口

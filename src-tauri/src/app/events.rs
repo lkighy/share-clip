@@ -8,7 +8,6 @@ pub const SHARED_FILES_CHANGED: &str = "share://shared-files-changed";
 pub const SHARED_FILE_INDEX_CHANGED: &str = "share://shared-file-index-changed";
 #[allow(dead_code)]
 pub const INBOUND_REQUESTED: &str = "share://inbound-requested";
-#[allow(dead_code)]
 pub const CONNECTION_STATUS_CHANGED: &str = "share://connection-status-changed";
 pub const CLIPBOARD_CHANGED: &str = "clipboard://changed";
 pub const SERVER_STATUS_CHANGED: &str = "server://status-changed";
@@ -53,6 +52,14 @@ pub fn emit_server_status_changed(app: &AppHandle, reason: &'static str) {
         Vec::new(),
         reason,
     );
+}
+
+pub fn emit_inbound_requested(app: &AppHandle, ids: Vec<String>, reason: &'static str) {
+    emit_data_changed(app, INBOUND_REQUESTED, "inbound_connections", ids, reason);
+}
+
+pub fn emit_connection_status_changed(app: &AppHandle, ids: Vec<String>, reason: &'static str) {
+    emit_data_changed(app, CONNECTION_STATUS_CHANGED, "connections", ids, reason);
 }
 
 fn emit_data_changed(
