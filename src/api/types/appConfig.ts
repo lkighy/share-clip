@@ -5,6 +5,8 @@ export type AppConfig = {
   clipboard_window_width: number;
   clipboard_window_height: number;
   clipboard_window_spacing: number;
+  share_files_view_mode: string;
+  share_files_item_zoom: number;
   auto_cleanup_invalid_clipboard_data: boolean;
   cache_dir: string;
   remote_cache_dir: string;

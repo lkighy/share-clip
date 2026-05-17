@@ -34,6 +34,7 @@ import { operationWindow } from "@/api/window";
 import { getLocalDeviceInfo, type LocalDeviceInfo } from "@/api/appConfig";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { formatDisplayPath } from "@/lib/utils";
+import { loadAppConfig, saveAppConfig, useAppConfigStore } from "@/store/appConfigStore";
 import {
   addManualSharedPaths,
   cacheRemoteSharedFile,
@@ -547,9 +548,11 @@ function applyCacheToRemoteNode(node: RemoteFileNode, cached?: RemoteCachedFileI
 }
 
 export default function ShareFilesWindow() {
+  const { data: appConfig } = useAppConfigStore();
   const [tab, setTab] = useState<TabKey>("mine");
   const [viewMode, setViewMode] = useState<ViewMode>("icons");
   const [itemZoom, setItemZoom] = useState(100);
+  const [shareFilesPrefsReady, setShareFilesPrefsReady] = useState(false);
 
   const [mySharedFiles, setMySharedFiles] = useState<LocalSharedFileItem[]>([]);
   const [mineLoading, setMineLoading] = useState(false);
@@ -649,6 +652,36 @@ export default function ShareFilesWindow() {
   const setZoom = (value: number) => {
     setItemZoom(Math.min(180, Math.max(70, value)));
   };
+
+  useEffect(() => {
+    void loadAppConfig();
+  }, []);
+
+  useEffect(() => {
+    if (!appConfig || shareFilesPrefsReady) return;
+    const configViewMode =
+      appConfig.share_files_view_mode === "tiles" || appConfig.share_files_view_mode === "details"
+        ? appConfig.share_files_view_mode
+      : "icons";
+    setViewMode(configViewMode);
+    setItemZoom(Math.min(180, Math.max(70, appConfig.share_files_item_zoom ?? 100)));
+    setShareFilesPrefsReady(true);
+  }, [appConfig, shareFilesPrefsReady]);
+
+  useEffect(() => {
+    if (!appConfig || !shareFilesPrefsReady) return;
+    if (appConfig.share_files_view_mode === viewMode && appConfig.share_files_item_zoom === itemZoom) {
+      return;
+    }
+    const timeout = window.setTimeout(() => {
+      void saveAppConfig({
+        share_files_view_mode: viewMode,
+        share_files_item_zoom: itemZoom,
+      });
+    }, 250);
+
+    return () => window.clearTimeout(timeout);
+  }, [appConfig, itemZoom, shareFilesPrefsReady, viewMode]);
 
   const replaceRemoteUser = (updated: RemoteShareUser) => {
     setRemoteUsers((prev) => {

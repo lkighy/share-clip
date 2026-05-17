@@ -20,6 +20,8 @@ pub struct AppConfig {
     pub clipboard_window_width: i32,
     pub clipboard_window_height: i32,
     pub clipboard_window_spacing: i32,
+    pub share_files_view_mode: String,
+    pub share_files_item_zoom: i32,
     // 是否自动清理失效数据
     pub auto_cleanup_invalid_clipboard_data: bool,
     // 缓存目录
@@ -69,6 +71,8 @@ pub struct AppConfigUpdate {
     pub clipboard_window_width: Option<i32>,
     pub clipboard_window_height: Option<i32>,
     pub clipboard_window_spacing: Option<i32>,
+    pub share_files_view_mode: Option<String>,
+    pub share_files_item_zoom: Option<i32>,
     pub auto_cleanup_invalid_clipboard_data: Option<bool>,
     pub cache_dir: Option<String>,
     pub remote_cache_dir: Option<String>,
@@ -117,6 +121,15 @@ impl AppConfigUpdate {
         }
         if let Some(value) = self.clipboard_window_spacing {
             config.clipboard_window_spacing = value;
+        }
+        if let Some(value) = self.share_files_view_mode {
+            let value = value.trim();
+            if !value.is_empty() {
+                config.share_files_view_mode = value.to_string();
+            }
+        }
+        if let Some(value) = self.share_files_item_zoom {
+            config.share_files_item_zoom = value;
         }
         if let Some(value) = self.auto_cleanup_invalid_clipboard_data {
             config.auto_cleanup_invalid_clipboard_data = value;
@@ -187,6 +200,8 @@ impl Default for AppConfig {
             clipboard_window_width: 420,
             clipboard_window_height: 640,
             clipboard_window_spacing: 10,
+            share_files_view_mode: "icons".to_string(),
+            share_files_item_zoom: 100,
             auto_cleanup_invalid_clipboard_data: true,
             cache_dir: default_cache_dir(),
             remote_cache_dir: "remote".to_string(),
