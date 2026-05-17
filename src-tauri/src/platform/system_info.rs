@@ -1,9 +1,62 @@
+use tauri::AppHandle;
+#[cfg(not(target_os = "windows"))]
+use tauri::Window;
+
+pub fn monitor_bounds_by_point(app: &AppHandle, x: i32, y: i32) -> Option<(i32, i32, i32, i32)> {
+    app.available_monitors()
+        .ok()
+        .and_then(|monitors| {
+            monitors.into_iter().find_map(|monitor| {
+                let work_area = monitor.work_area();
+                let pos = work_area.position;
+                let size = work_area.size;
+                let right = pos.x + size.width as i32;
+                let bottom = pos.y + size.height as i32;
+
+                (x >= pos.x && x < right && y >= pos.y && y < bottom)
+                    .then_some((pos.x, pos.y, right, bottom))
+            })
+        })
+        .or_else(|| {
+            app.primary_monitor().ok().flatten().map(|monitor| {
+                let work_area = monitor.work_area();
+                let pos = work_area.position;
+                let size = work_area.size;
+                (
+                    pos.x,
+                    pos.y,
+                    pos.x + size.width as i32,
+                    pos.y + size.height as i32,
+                )
+            })
+        })
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn current_or_primary_monitor_bounds(window: &Window) -> Option<(i32, i32, i32, i32)> {
+    window
+        .current_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| window.primary_monitor().ok().flatten())
+        .map(|monitor| {
+            let work_area = monitor.work_area();
+            let pos = work_area.position;
+            let size = work_area.size;
+            (
+                pos.x,
+                pos.y,
+                pos.x + size.width as i32,
+                pos.y + size.height as i32,
+            )
+        })
+}
+
 #[cfg(target_os = "windows")]
 pub mod caret {
     use std::thread;
     use std::time::Duration;
 
-    use tauri::AppHandle;
     use windows::core::{Interface, BOOL};
     use windows::Win32::{
         Foundation::{HWND, POINT, RECT},
@@ -32,35 +85,6 @@ pub mod caret {
         }
 
         unsafe { get_cursor_rect() }
-    }
-
-    pub fn get_monitor_bounds_by_point(app: &AppHandle, x: i32, y: i32) -> (i32, i32, i32, i32) {
-        app.available_monitors()
-            .ok()
-            .and_then(|monitors| {
-                monitors.into_iter().find_map(|monitor| {
-                    let pos = monitor.position();
-                    let size = monitor.size();
-                    let right = pos.x + size.width as i32;
-                    let bottom = pos.y + size.height as i32;
-
-                    (x >= pos.x && x < right && y >= pos.y && y < bottom)
-                        .then_some((pos.x, pos.y, right, bottom))
-                })
-            })
-            .or_else(|| {
-                app.primary_monitor().ok().flatten().map(|monitor| {
-                    let pos = monitor.position();
-                    let size = monitor.size();
-                    (
-                        pos.x,
-                        pos.y,
-                        pos.x + size.width as i32,
-                        pos.y + size.height as i32,
-                    )
-                })
-            })
-            .unwrap_or((0, 0, 1920, 1080))
     }
 
     unsafe fn get_pos_once() -> Option<(i32, i32, i32, i32)> {

@@ -13,6 +13,10 @@ export function getShareServerIpOptions() {
   return call<string[]>("get_share_server_ip_options");
 }
 
+export function openLogDir() {
+  return call<void>("open_log_dir");
+}
+
 export type LocalDeviceInfo = {
   device_id: string;
   device_name: string;

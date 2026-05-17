@@ -5,8 +5,8 @@ use crate::entity::clipboard_record;
 use crate::error::{ApiError, AppError};
 use crate::models::clipboard::{ClipboardResponse, ClipboardType};
 use crate::platform::automation::{Automation, InjectContent};
+use crate::utils::text::{html_to_plain_text, rtf_to_plain_text};
 use base64::Engine;
-use html2text::from_read;
 use log::{error, info};
 use std::path::PathBuf;
 use std::time::Duration;
@@ -101,14 +101,17 @@ async fn copy_inject_content_to_clipboard(content: InjectContent) -> Result<(), 
             .await
             .map_err(|e| AppError::InvalidInput(e.to_string()).into()),
         InjectContent::Html(html) => {
-            let text = from_read(html.as_bytes(), usize::MAX);
+            let text = html_to_plain_text(&html);
             tauri_plugin_clipboard_x::write_html(text, html)
                 .await
                 .map_err(|e| AppError::InvalidInput(e.to_string()).into())
         }
-        InjectContent::Rtf(rtf) => tauri_plugin_clipboard_x::write_rtf(String::new(), rtf)
-            .await
-            .map_err(|e| AppError::InvalidInput(e.to_string()).into()),
+        InjectContent::Rtf(rtf) => {
+            let text = rtf_to_plain_text(&rtf);
+            tauri_plugin_clipboard_x::write_rtf(text, rtf)
+                .await
+                .map_err(|e| AppError::InvalidInput(e.to_string()).into())
+        }
         InjectContent::Files(files) => {
             let files = files
                 .into_iter()
@@ -278,7 +281,7 @@ pub async fn copy_clipboard_record(app: tauri::AppHandle, id: i32) -> Result<(),
                 error!("copy_clipboard_record utf8 decode failed: id={id}, type=html, error={e}");
                 AppError::from(e)
             })?;
-            let text = from_read(html.as_bytes(), usize::MAX);
+            let text = html_to_plain_text(&html);
             tauri_plugin_clipboard_x::write_html(text, html)
                 .await
                 .map_err(|e| {
@@ -291,7 +294,7 @@ pub async fn copy_clipboard_record(app: tauri::AppHandle, id: i32) -> Result<(),
                 error!("copy_clipboard_record utf8 decode failed: id={id}, type=rtf, error={e}");
                 AppError::from(e)
             })?;
-            let text = record.preview.unwrap_or_default();
+            let text = rtf_to_plain_text(&rtf);
             tauri_plugin_clipboard_x::write_rtf(text, rtf)
                 .await
                 .map_err(|e| {

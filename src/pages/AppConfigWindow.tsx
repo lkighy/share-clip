@@ -3,13 +3,13 @@ import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { toast } from "sonner";
-import { RefreshCcw, X } from "lucide-react";
+import { FolderOpen, RefreshCcw, X } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 
 import { Toaster } from "@/components/ui/sonner.tsx";
 import { Button } from "@/components/ui/button.tsx";
 import type { AppConfig, AppConfigUpdate } from "@/api/types/appConfig";
-import { getShareServerIpOptions } from "@/api/appConfig.ts";
+import { getShareServerIpOptions, openLogDir } from "@/api/appConfig.ts";
 import { loadAppConfig, saveAppConfig, useAppConfigStore } from "@/store/appConfigStore";
 import HotkeyInput from "@/components/ui/HotkeyInput.tsx";
 import { operationWindow } from "@/api/window.ts";
@@ -201,6 +201,15 @@ export default function AppConfigWindow() {
     }
   };
 
+  const handleOpenLogDir = async () => {
+    try {
+      await openLogDir();
+    } catch (error) {
+      console.error(error);
+      toast.error("打开日志目录失败");
+    }
+  };
+
   const handleSave = async () => {
     try {
       const shortcut = form.shortcut.trim();
@@ -345,6 +354,12 @@ export default function AppConfigWindow() {
               </SettingsRow>
               <SettingsRow label="窗口间距">
                 <input className="fluent-input" value={form.clipboard_window_spacing} onChange={(e) => setForm((prev) => ({ ...prev, clipboard_window_spacing: e.target.value }))} placeholder="10" />
+              </SettingsRow>
+              <SettingsRow label="日志目录">
+                <Button type="button" variant="outline" size="sm" className="w-full rounded-md border-slate-200 bg-white/70" onClick={() => void handleOpenLogDir()}>
+                  <FolderOpen size={15} />
+                  打开
+                </Button>
               </SettingsRow>
             </SettingsSection>
 

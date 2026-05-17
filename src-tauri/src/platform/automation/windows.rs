@@ -6,6 +6,7 @@ use enigo::{Enigo, Key, Keyboard, Settings};
 use std::path::PathBuf;
 
 use crate::platform::automation::InjectContent;
+use crate::utils::text::{html_to_plain_text, rtf_to_plain_text};
 
 pub fn inject(content: InjectContent) -> Result<()> {
     set_clipboard(content)?;
@@ -49,7 +50,7 @@ fn set_text(text: String) -> Result<()> {
 
 fn set_html(html: String) -> Result<()> {
     let ctx = ClipboardContext::new().map_err(|e| anyhow!(e.to_string()))?;
-    let plain = html2text::from_read(html.as_bytes(), usize::MAX);
+    let plain = html_to_plain_text(&html);
     ctx.set(vec![
         ClipboardContent::Text(plain),
         ClipboardContent::Html(html),
@@ -61,7 +62,7 @@ fn set_html(html: String) -> Result<()> {
 fn set_rtf(rtf: String) -> Result<()> {
     let ctx = ClipboardContext::new().map_err(|e| anyhow!(e.to_string()))?;
     // Keep a plain-text fallback so controls that only accept CF_UNICODETEXT are still pasteable.
-    let plain = rtf.clone();
+    let plain = rtf_to_plain_text(&rtf);
     ctx.set(vec![
         ClipboardContent::Text(plain),
         ClipboardContent::Rtf(rtf),

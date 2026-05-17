@@ -161,18 +161,18 @@ pub mod windows {
 
 // MacOS 平台实现
 #[cfg(target_os = "macos")]
-mod macos {
+pub mod macos {
     use objc::{msg_send, runtime::Object, sel, sel_impl};
-    use tauri::{Runtime, Window};
+    use tauri::Window;
 
-    pub fn init_non_activating_panel<R: Runtime>(window: &Window<R>) {
+    pub fn init_non_activating_panel(window: &Window) {
         unsafe {
-            let ns_window: *mut Object = window.ns_window().unwrap() as _;
+            let Ok(ns_window) = window.ns_window() else {
+                return;
+            };
+            let ns_window: *mut Object = ns_window as _;
 
-            // 设置为 NSPanel 特性
             let _: () = msg_send![ns_window, setLevel: 3]; // NSFloatingWindowLevel
-            let _: () = msg_send![ns_window, setCanBecomeKeyWindow: false];
-            let _: () = msg_send![ns_window, setCanBecomeMainWindow: false];
             let _: () = msg_send![ns_window, setCollectionBehavior: 16]; // NSWindowCollectionBehaviorTransient
         }
     }

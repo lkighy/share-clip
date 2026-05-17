@@ -52,14 +52,6 @@ pub fn source_type_after_removing_clipboard(source_type: i32) -> Option<i32> {
     }
 }
 
-pub fn source_type_after_removing_direct(source_type: i32) -> Option<i32> {
-    if has_clipboard_source(source_type) {
-        Some(SOURCE_CLIPBOARD)
-    } else {
-        None
-    }
-}
-
 pub async fn cleanup_orphaned_clipboard_local_files(
     db: &DatabaseConnection,
 ) -> Result<(), AppError> {

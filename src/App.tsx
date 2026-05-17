@@ -4,7 +4,10 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import ClipboardWindow from "@/pages/ClipboardWindow.tsx";
 import ShareFilesWindow from "@/pages/ShareFilesWindow.tsx";
 import AppConfigWindow from "@/pages/AppConfigWindow.tsx";
+import { installFrontendLogger } from "@/lib/logger";
 import "./index.css";
+
+installFrontendLogger();
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
     <React.StrictMode>

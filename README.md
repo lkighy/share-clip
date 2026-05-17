@@ -1,20 +1,58 @@
-# Tauri + React + Typescript
+# 共享剪切板
 
-This template should help get you started developing with Tauri, React and Typescript in Vite.
+[GitHub 仓库](https://github.com/lkighy/share-clip)
 
-## Recommended IDE Setup
+共享剪切板是一款桌面端剪切板与文件共享工具，用来在本机和可信设备之间快速保存、检索、粘贴与共享内容。应用基于 Tauri、Rust 和 React 构建，核心目标是让剪切板历史、跨设备文本/图片/文件流转，以及临时文件共享变得轻量、直接。
 
-- [VS Code](https://code.visualstudio.com/) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
+## 下载
 
-## `src-tauri/src` 目录说明
+发布版本会放在 GitHub Releases：
 
-- `app/`: 应用层逻辑，包含业务命令、配置加载、快捷键行为、窗口与托盘 UI 相关代码。
-- `platform/`: 平台能力封装，放置与操作系统相关的实现（如非激活窗口、系统信息与光标位置获取等）。
-- `lib.rs`: Tauri 应用主入口，负责组装插件、注册命令、初始化配置与启动流程。
-- `main.rs`: 可执行入口，调用 `share_clip_lib::run()` 启动应用。
+https://github.com/lkighy/share-clip/releases
 
+当前项目仍处于早期阶段，建议优先使用预发布版本进行体验和反馈。
 
-## sea-orm 迁移方式
-```shell
-sea-orm-cli generate entity -u sqlite://share_clip.db?mode=rwc -o src/entity
-```
+## 功能
+
+- 剪切板历史记录：保存文本、HTML、RTF、图片和文件类剪切板内容。
+- 快捷键唤出：通过全局快捷键快速打开剪切板窗口并粘贴目标内容。
+- 远程剪切板浏览：连接可信设备后浏览远程剪切板记录，并支持复制或粘贴到本机。
+- 文件共享：手动共享本地文件/文件夹，也支持由剪切板文件生成临时共享项。
+- 设备连接授权：支持连接申请、授权状态管理和共享服务器访问控制。
+- 缓存与清理：支持本地缓存、远程文件缓存、过期数据和失效数据清理。
+- 日志排障：后端和前端日志统一写入本地日志目录，可在设置页中打开。
+
+## 使用场景
+
+- 在多个设备之间同步临时文本、图片或文件。
+- 从剪切板历史中找回刚复制过的内容。
+- 将本机文件快速暴露给局域网内已授权设备下载。
+- 在不切换窗口焦点的情况下快速唤出剪切板并完成粘贴。
+
+## 当前状态
+
+项目仍处于早期版本。Windows 路径是当前主要验证目标；Linux 和 macOS 的编译及系统级交互行为仍需要在真实环境中持续验证。
+
+## 构建与开发
+
+编译、开发环境、发布流水线和数据库迁移说明请查看 [BUILD.md](https://github.com/lkighy/share-clip/blob/main/BUILD.md)。
+
+## 反馈
+
+问题反馈和功能建议请提交到 GitHub Issues：
+
+https://github.com/lkighy/share-clip/issues
+
+## 技术栈
+
+- Tauri 2
+- Rust
+- React
+- TypeScript
+- Vite
+- Tailwind CSS
+- SeaORM + SQLite
+
+## 许可证
+
+暂未声明。

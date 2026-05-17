@@ -12,7 +12,7 @@ use crate::app::commands::window;
 use crate::db::service::cleanup::{cleanup_invalid_items, cleanup_old_items};
 use crate::services::clipboard_watcher::start_clipboard_watcher;
 use app::commands::{
-    clipboard, config as config_commands, server as server_commands,
+    clipboard, config as config_commands, logs as log_commands, server as server_commands,
     share_files as share_files_commands,
 };
 use app::config::AppConfigStore;
@@ -22,12 +22,32 @@ use app::ui::window::init_app;
 use db::{init_db, DbState};
 use log::{error, info};
 use tauri::Manager;
+use tauri_plugin_log::{RotationStrategy, Target, TargetKind, TimezoneStrategy};
+
+const LOG_MAX_FILE_SIZE: u128 = 2 * 1024 * 1024;
+const LOG_FILE_COUNT: usize = 5;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_log::Builder::new().build())
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                .clear_targets()
+                .targets([
+                    Target::new(TargetKind::Stdout),
+                    Target::new(TargetKind::LogDir {
+                        file_name: Some("share-clip".into()),
+                    }),
+                ])
+                .level(log::LevelFilter::Info)
+                .level_for("share_clip_lib", log::LevelFilter::Debug)
+                .level_for("webview", log::LevelFilter::Info)
+                .timezone_strategy(TimezoneStrategy::UseLocal)
+                .rotation_strategy(RotationStrategy::KeepSome(LOG_FILE_COUNT))
+                .max_file_size(LOG_MAX_FILE_SIZE)
+                .build(),
+        )
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_clipboard_x::init())
         .setup(|app| {
@@ -118,6 +138,8 @@ pub fn run() {
             share_files_commands::reveal_remote_shared_cache,
             share_files_commands::remove_remote_shared_cache,
             window::operation_window,
+            log_commands::open_log_dir,
+            log_commands::get_log_dir,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

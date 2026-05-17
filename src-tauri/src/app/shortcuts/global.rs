@@ -1,8 +1,11 @@
 use crate::app::config::AppConfigStore;
-#[cfg(target_os = "windows")]
-use crate::platform::non_activating::windows::show_window_non_activating;
 use crate::platform::system_info;
-use tauri::{AppHandle, LogicalSize, Manager, Position};
+#[cfg(not(target_os = "windows"))]
+use log::debug;
+use log::warn;
+#[cfg(not(target_os = "windows"))]
+use tauri::Emitter;
+use tauri::{AppHandle, LogicalSize, Manager, Position, Window};
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
 pub fn init_register_shortcut(app: &AppHandle) {
@@ -16,48 +19,95 @@ pub fn init_register_shortcut(app: &AppHandle) {
         .on_shortcut(shortcut.as_str(), move |app, _, _| {
             if let Some(window) = app.get_window("index") {
                 if let Ok(false) = window.is_visible() {
-                    let config = app.state::<AppConfigStore>().get();
-                    let window_width = config.clipboard_window_width;
-                    let window_height = config.clipboard_window_height;
-                    let spacing = config.clipboard_window_spacing;
-
-                    let _ = window.set_size(LogicalSize::new(
-                        window_width.max(200) as f64,
-                        window_height.max(120) as f64,
-                    ));
-
-                    #[cfg(target_os = "windows")]
-                    {
-                        let data = system_info::caret::get_ui_automation_pos();
-                        if let Some((left, top, right, bottom)) = data {
-                            let (screen_left, screen_top, screen_right, screen_bottom) =
-                                system_info::caret::get_monitor_bounds_by_point(app, left, bottom);
-
-                            let (win_x, win_y) = compute_best_window_position(
-                                left,
-                                top,
-                                right,
-                                bottom,
-                                window_width,
-                                window_height,
-                                spacing,
-                                screen_left,
-                                screen_top,
-                                screen_right,
-                                screen_bottom,
-                            );
-
-                            let _ = window.set_position(Position::Logical((win_x, win_y).into()));
-                        }
-
-                        show_window_non_activating(&window);
-                    }
-
-                    #[cfg(not(target_os = "windows"))]
-                    let _ = window.show();
+                    show_clipboard_window(app, &window);
                 }
             }
         });
+}
+
+fn show_clipboard_window(app: &AppHandle, window: &Window) {
+    let config = app.state::<AppConfigStore>().get();
+    let window_width = config.clipboard_window_width.max(200);
+    let window_height = config.clipboard_window_height.max(120);
+    let spacing = config.clipboard_window_spacing;
+
+    if let Err(error) = window.set_size(LogicalSize::new(window_width as f64, window_height as f64))
+    {
+        warn!("set clipboard window size failed: {error}");
+    }
+
+    let (anchor, monitor_bounds) = clipboard_window_anchor(app, window);
+    if let Some((
+        (left, top, right, bottom),
+        (screen_left, screen_top, screen_right, screen_bottom),
+    )) = anchor.zip(monitor_bounds)
+    {
+        let (win_x, win_y) = compute_best_window_position(
+            left,
+            top,
+            right,
+            bottom,
+            window_width,
+            window_height,
+            spacing,
+            screen_left,
+            screen_top,
+            screen_right,
+            screen_bottom,
+        );
+        if let Err(error) = window.set_position(Position::Logical((win_x, win_y).into())) {
+            warn!("set clipboard window position failed: {error}");
+        }
+    }
+
+    show_clipboard_window_platform(window);
+}
+
+#[cfg(target_os = "windows")]
+fn clipboard_window_anchor(
+    app: &AppHandle,
+    _window: &Window,
+) -> (Option<(i32, i32, i32, i32)>, Option<(i32, i32, i32, i32)>) {
+    let anchor = system_info::caret::get_ui_automation_pos();
+    let monitor = anchor
+        .and_then(|(_, _, right, bottom)| system_info::monitor_bounds_by_point(app, right, bottom));
+    (anchor, monitor)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn clipboard_window_anchor(
+    app: &AppHandle,
+    window: &Window,
+) -> (Option<(i32, i32, i32, i32)>, Option<(i32, i32, i32, i32)>) {
+    let cursor = match app.cursor_position() {
+        Ok(position) => position,
+        Err(error) => {
+            debug!("read cursor position failed, falling back to current monitor: {error}");
+            return (None, system_info::current_or_primary_monitor_bounds(window));
+        }
+    };
+
+    let x = cursor.x.round() as i32;
+    let y = cursor.y.round() as i32;
+    (
+        Some((x, y, x + 1, y + 1)),
+        system_info::monitor_bounds_by_point(app, x, y)
+            .or_else(|| system_info::current_or_primary_monitor_bounds(window)),
+    )
+}
+
+#[cfg(target_os = "windows")]
+fn show_clipboard_window_platform(window: &Window) {
+    crate::platform::non_activating::windows::show_window_non_activating(window);
+}
+
+#[cfg(not(target_os = "windows"))]
+fn show_clipboard_window_platform(window: &Window) {
+    if let Err(error) = window.show() {
+        warn!("show clipboard window failed: {error}");
+        return;
+    }
+    let _ = window.emit("clipboard-window-invoked", ());
 }
 
 fn compute_best_window_position(

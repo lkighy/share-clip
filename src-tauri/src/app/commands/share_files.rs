@@ -9,11 +9,11 @@ use std::process::Command;
 use tauri::Manager;
 
 use crate::db::service::local_files::{
-    parse_source_clipboard_ids, source_type_after_adding_direct, source_type_after_removing_direct,
-    SHARE_MODE_MANUAL, SHARE_MODE_TEMP, SOURCE_DIRECT,
+    parse_source_clipboard_ids, source_type_after_adding_direct, SHARE_MODE_MANUAL, SOURCE_DIRECT,
 };
 use crate::entity::clipboard_record;
 use crate::entity::inbound_connections;
+use crate::entity::local_file_index;
 use crate::entity::local_files;
 use crate::entity::outbound_connections;
 use crate::entity::shared_file_index;
@@ -497,22 +497,32 @@ pub async fn unshare_local_shared_file(app: tauri::AppHandle, id: String) -> Res
         .map_err(AppError::from)?
         .ok_or(AppError::NotFound)?;
     let mut am: local_files::ActiveModel = row.clone().into();
-    if let Some(next_source_type) = source_type_after_removing_direct(row.source_type) {
-        let ids = parse_source_clipboard_ids(row.source_clipboard_id.as_deref());
-        if ids.is_empty() {
-            am.is_valid = Set(0);
-            am.source_clipboard_id = Set(None);
-        } else {
-            am.source_type = Set(next_source_type);
-            am.share_mode = Set(SHARE_MODE_TEMP);
-        }
-    } else {
-        am.is_valid = Set(0);
-        am.source_clipboard_id = Set(None);
-    }
+    am.is_valid = Set(0);
+    am.source_clipboard_id = Set(None);
     am.updated_at = Set(Some(chrono::Utc::now().timestamp()));
     am.update(db).await.map_err(AppError::from)?;
+    mark_local_share_index_removed(db, &id).await?;
     crate::app::events::emit_local_files_changed(&app, vec![id], "local_file_unshared");
+    Ok(())
+}
+
+async fn mark_local_share_index_removed(
+    db: &sea_orm::DatabaseConnection,
+    local_file_id: &str,
+) -> Result<(), ApiError> {
+    let rows = local_file_index::Entity::find()
+        .filter(local_file_index::Column::LocalFileId.eq(local_file_id.to_string()))
+        .all(db)
+        .await
+        .map_err(AppError::from)?;
+
+    for row in rows {
+        let mut am: local_file_index::ActiveModel = row.into();
+        am.exists_flag = Set(0);
+        am.dirty = Set(0);
+        am.update(db).await.map_err(AppError::from)?;
+    }
+
     Ok(())
 }
 

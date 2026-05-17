@@ -3,9 +3,7 @@ use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use html2text::from_read;
 use log::info;
-use regex::Regex;
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 use tauri::Manager;
 use uuid::Uuid;
@@ -21,6 +19,7 @@ use crate::models::clipboard::ClipboardType;
 use crate::services::clipboard_watcher::ClipboardChangeEvent;
 use crate::utils::format::{generate_image_thumbnail, normalize_file_uri};
 use crate::utils::image::format_file_size;
+use crate::utils::text::{html_to_plain_text, rtf_to_plain_text};
 
 type StorageResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
@@ -350,33 +349,6 @@ fn preview_from_plain_text(text: &str) -> Option<String> {
     } else {
         Some(preview.chars().take(100).collect::<String>())
     }
-}
-
-fn html_to_plain_text(html: &str) -> String {
-    from_read(html.as_bytes(), usize::MAX)
-}
-
-fn rtf_to_plain_text(rtf: &str) -> String {
-    let hex_re = Regex::new(r"\\'([0-9a-fA-F]{2})").expect("valid rtf hex regex");
-    let mut decoded = String::with_capacity(rtf.len());
-    let mut last = 0usize;
-    for cap in hex_re.captures_iter(rtf) {
-        let m = cap.get(0).expect("full match exists");
-        decoded.push_str(&rtf[last..m.start()]);
-        if let Some(hex) = cap.get(1) {
-            if let Ok(value) = u8::from_str_radix(hex.as_str(), 16) {
-                decoded.push(value as char);
-            }
-        }
-        last = m.end();
-    }
-    decoded.push_str(&rtf[last..]);
-
-    let ctrl_re = Regex::new(r"\\[a-zA-Z]+\d* ?|\\[{}\\]").expect("valid rtf control regex");
-    let braces_re = Regex::new(r"[{}]").expect("valid brace regex");
-
-    let text = ctrl_re.replace_all(&decoded, " ");
-    braces_re.replace_all(&text, " ").into_owned()
 }
 
 fn hash_bytes(bytes: &[u8]) -> String {
