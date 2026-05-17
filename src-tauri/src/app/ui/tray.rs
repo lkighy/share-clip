@@ -1,6 +1,7 @@
 use crate::app::config::AppConfigStore;
 use crate::app::ui::window::open_or_create_window;
 use crate::models::window::WindowLabel;
+use log::error;
 use tauri::menu::{MenuBuilder, MenuItem, MenuItemBuilder};
 use tauri::tray::TrayIconBuilder;
 use tauri::{App, AppHandle, Emitter, Manager, Wry};
@@ -113,13 +114,12 @@ pub fn init_menu(app: &App) {
             // }
             "shared-files" => {
                 if let Err(e) = open_or_create_window(app, WindowLabel::ShareFile) {
-                    // TODO: 添加 log
-                    println!("{}", e);
+                    error!("open shared files window failed: {e}");
                 }
             }
             "connect-device" => {
                 if let Err(e) = open_or_create_window(app, WindowLabel::ShareFile) {
-                    println!("{}", e);
+                    error!("open shared files window for device tab failed: {e}");
                     return;
                 }
                 if let Some(window) = app.get_window(WindowLabel::ShareFile.label()) {
@@ -128,8 +128,7 @@ pub fn init_menu(app: &App) {
             }
             "app-config" => {
                 if let Err(e) = open_or_create_window(app, WindowLabel::Config) {
-                    // TODO: 添加 log
-                    println!("{}", e);
+                    error!("open app config window failed: {e}");
                 }
             }
             "toggle-share-server" => {
@@ -137,7 +136,7 @@ pub fn init_menu(app: &App) {
                 match state.is_running() {
                     Ok(true) => {
                         if let Err(e) = state.stop() {
-                            println!("{}", e);
+                            error!("stop share server from tray failed: {e}");
                         }
                     }
                     Ok(false) => {
@@ -147,10 +146,10 @@ pub fn init_menu(app: &App) {
                             config.share_server_port,
                             app.clone(),
                         ) {
-                            println!("{}", e);
+                            error!("start share server from tray failed: {e}");
                         }
                     }
-                    Err(e) => println!("{}", e),
+                    Err(e) => error!("read share server status from tray failed: {e}"),
                 }
                 update_share_server_menu_label(app);
             }
