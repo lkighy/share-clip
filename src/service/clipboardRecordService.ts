@@ -1,8 +1,10 @@
 import {
     clipboardRecordList,
     copyClipboardContent,
+    copyClipboardContentAs,
     deleteClipboardRecord,
     setClipboardContent,
+    setClipboardContentAs,
     toggleFavorite,
     toggleShare
 } from "@/api/clipboard.ts";
@@ -19,8 +21,16 @@ export async function pasteItem(id: number) {
     await setClipboardContent(id)
 }
 
+export async function pasteItemAs(id: number, format: string, asText: boolean) {
+    await setClipboardContentAs(id, format, asText)
+}
+
 export async function copyItem(id: number) {
     await copyClipboardContent(id)
+}
+
+export async function copyItemAs(id: number, format: string, asText: boolean) {
+    await copyClipboardContentAs(id, format, asText)
 }
 
 export async function handleFavoriteToggle(id: number) {

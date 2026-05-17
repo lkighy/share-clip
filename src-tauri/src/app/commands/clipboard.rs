@@ -1,5 +1,8 @@
 use crate::app::config::AppConfigStore;
 use crate::db;
+use crate::db::service::clipboard_formats::{
+    ClipboardFormats, FORMAT_HTML, FORMAT_RTF, FORMAT_TEXT,
+};
 use crate::db::DbState;
 use crate::entity::clipboard_record;
 use crate::error::{ApiError, AppError};
@@ -40,6 +43,14 @@ pub struct RemoteClipboardContentPayload {
     pub files: Option<Vec<String>>,
 }
 
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClipboardFormatPayload {
+    pub id: i32,
+    pub format: String,
+    pub as_text: bool,
+}
+
 #[tauri::command]
 pub async fn paste_remote_clipboard_content(
     payload: RemoteClipboardContentPayload,
@@ -62,9 +73,51 @@ pub async fn copy_remote_clipboard_content(
     copy_inject_content_to_clipboard(content).await
 }
 
+#[tauri::command]
+pub async fn paste_clipboard_record_as(
+    app: tauri::AppHandle,
+    payload: ClipboardFormatPayload,
+) -> Result<(), ApiError> {
+    let content =
+        clipboard_record_format_content(&app, payload.id, &payload.format, payload.as_text).await?;
+    let mut auto = Automation::new();
+    crate::services::clipboard_watcher::suppress_next_clipboard_changes(1, Duration::from_secs(2));
+    if let Err(e) = auto.inject(content) {
+        crate::services::clipboard_watcher::clear_suppressed_clipboard_changes();
+        return Err(AppError::from(e).into());
+    }
+
+    let db = app.state::<DbState>();
+    db::service::clipboard::mark_record_accessed(&db, payload.id)
+        .await
+        .map_err(|e| AppError::from(e))?;
+
+    #[cfg(target_os = "windows")]
+    crate::platform::non_activating::windows::hide_window();
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn copy_clipboard_record_as(
+    app: tauri::AppHandle,
+    payload: ClipboardFormatPayload,
+) -> Result<(), ApiError> {
+    let content =
+        clipboard_record_format_content(&app, payload.id, &payload.format, payload.as_text).await?;
+    copy_inject_content_to_clipboard(content).await
+}
+
 fn inject_content_from_remote_payload(
     payload: RemoteClipboardContentPayload,
 ) -> Result<InjectContent, ApiError> {
+    if payload.html.is_some() || payload.rtf.is_some() {
+        return Ok(InjectContent::RichText(ClipboardFormats {
+            text: payload.text,
+            html: payload.html,
+            rtf: payload.rtf,
+        }));
+    }
     if payload.r#type == ClipboardType::Text as i32 {
         return Ok(InjectContent::Text(payload.text.unwrap_or_default()));
     }
@@ -95,6 +148,56 @@ fn inject_content_from_remote_payload(
     Err(AppError::InvalidInput("不支持的远程剪贴板类型".to_string()).into())
 }
 
+async fn clipboard_record_format_content(
+    app: &tauri::AppHandle,
+    id: i32,
+    format: &str,
+    as_text: bool,
+) -> Result<InjectContent, ApiError> {
+    let db = app.state::<DbState>();
+    let config = app.state::<AppConfigStore>().get();
+    let record = db::service::clipboard::get_and_validate_clipboard_record(
+        &db,
+        id,
+        config.auto_cleanup_invalid_clipboard_data,
+    )
+    .await
+    .map_err(|e| AppError::from(e))?
+    .ok_or(AppError::NotFound)?;
+
+    let formats = db::service::clipboard_formats::load_formats(&db.conn, &record)
+        .await
+        .map_err(|e| AppError::from(e))?;
+
+    match format {
+        FORMAT_TEXT => {
+            let text = formats.primary_text();
+            Ok(InjectContent::Text(text))
+        }
+        FORMAT_HTML => {
+            let html = formats
+                .html
+                .ok_or_else(|| AppError::InvalidInput("该条目没有 HTML 格式".to_string()))?;
+            if as_text {
+                Ok(InjectContent::Text(html))
+            } else {
+                Ok(InjectContent::Html(html))
+            }
+        }
+        FORMAT_RTF => {
+            let rtf = formats
+                .rtf
+                .ok_or_else(|| AppError::InvalidInput("该条目没有 RTF 格式".to_string()))?;
+            if as_text {
+                Ok(InjectContent::Text(rtf))
+            } else {
+                Ok(InjectContent::Rtf(rtf))
+            }
+        }
+        _ => Err(AppError::InvalidInput(format!("不支持的剪贴板格式: {format}")).into()),
+    }
+}
+
 async fn copy_inject_content_to_clipboard(content: InjectContent) -> Result<(), ApiError> {
     match content {
         InjectContent::Text(text) => tauri_plugin_clipboard_x::write_text(text)
@@ -112,6 +215,9 @@ async fn copy_inject_content_to_clipboard(content: InjectContent) -> Result<(), 
                 .await
                 .map_err(|e| AppError::InvalidInput(e.to_string()).into())
         }
+        InjectContent::RichText(formats) => write_rich_text_to_clipboard(formats)
+            .await
+            .map_err(|e| AppError::InvalidInput(e).into()),
         InjectContent::Files(files) => {
             let files = files
                 .into_iter()
@@ -132,6 +238,42 @@ async fn copy_inject_content_to_clipboard(content: InjectContent) -> Result<(), 
                 .map_err(|e| AppError::InvalidInput(e.to_string()).into())
         }
     }
+}
+
+async fn write_rich_text_to_clipboard(formats: ClipboardFormats) -> Result<(), String> {
+    let text = formats.primary_text();
+
+    #[cfg(target_os = "windows")]
+    if formats.html.is_some() && formats.rtf.is_some() {
+        use clipboard_rs::{Clipboard, ClipboardContent, ClipboardContext};
+
+        let ctx = ClipboardContext::new().map_err(|e| e.to_string())?;
+        let mut contents = vec![ClipboardContent::Text(text)];
+        if let Some(html) = formats.html {
+            contents.push(ClipboardContent::Html(html));
+        }
+        if let Some(rtf) = formats.rtf {
+            contents.push(ClipboardContent::Rtf(rtf));
+        }
+        ctx.set(contents).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    if let Some(html) = formats.html {
+        tauri_plugin_clipboard_x::write_html(text, html)
+            .await
+            .map_err(|e| e.to_string())?;
+    } else if let Some(rtf) = formats.rtf {
+        tauri_plugin_clipboard_x::write_rtf(text, rtf)
+            .await
+            .map_err(|e| e.to_string())?;
+    } else {
+        tauri_plugin_clipboard_x::write_text(text)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
 }
 
 /// 查询剪切板数据的接口
@@ -157,27 +299,52 @@ pub async fn paste_clipboard_record(app: tauri::AppHandle, id: i32) -> Result<()
         return Err(AppError::NotFound.into());
     };
 
+    let formats = db::service::clipboard_formats::load_formats(&db.conn, &record)
+        .await
+        .map_err(|e| {
+            error!("paste_clipboard_record load formats failed: id={id}, error={e}");
+            AppError::from(e)
+        })?;
+
     let content = match record.r#type {
         t if t == ClipboardType::Text as i32 => {
-            let data = String::from_utf8(record.data.unwrap_or_default()).map_err(|e| {
-                error!("paste_clipboard_record utf8 decode failed: id={id}, type=text, error={e}");
-                AppError::from(e)
-            })?;
-            Some(InjectContent::Text(data))
+            if !formats.is_empty() {
+                Some(InjectContent::RichText(formats))
+            } else {
+                let data = String::from_utf8(record.data.unwrap_or_default()).map_err(|e| {
+                    error!(
+                        "paste_clipboard_record utf8 decode failed: id={id}, type=text, error={e}"
+                    );
+                    AppError::from(e)
+                })?;
+                Some(InjectContent::Text(data))
+            }
         }
         t if t == ClipboardType::Html as i32 => {
-            let data = String::from_utf8(record.data.unwrap_or_default()).map_err(|e| {
-                error!("paste_clipboard_record utf8 decode failed: id={id}, type=html, error={e}");
-                AppError::from(e)
-            })?;
-            Some(InjectContent::Html(data))
+            if !formats.is_empty() {
+                Some(InjectContent::RichText(formats))
+            } else {
+                let data = String::from_utf8(record.data.unwrap_or_default()).map_err(|e| {
+                    error!(
+                        "paste_clipboard_record utf8 decode failed: id={id}, type=html, error={e}"
+                    );
+                    AppError::from(e)
+                })?;
+                Some(InjectContent::Html(data))
+            }
         }
         t if t == ClipboardType::Rtf as i32 => {
-            let data = String::from_utf8(record.data.unwrap_or_default()).map_err(|e| {
-                error!("paste_clipboard_record utf8 decode failed: id={id}, type=rtf, error={e}");
-                AppError::from(e)
-            })?;
-            Some(InjectContent::Rtf(data))
+            if !formats.is_empty() {
+                Some(InjectContent::RichText(formats))
+            } else {
+                let data = String::from_utf8(record.data.unwrap_or_default()).map_err(|e| {
+                    error!(
+                        "paste_clipboard_record utf8 decode failed: id={id}, type=rtf, error={e}"
+                    );
+                    AppError::from(e)
+                })?;
+                Some(InjectContent::Rtf(data))
+            }
         }
         t if t == ClipboardType::Image as i32 => {
             let path = String::from_utf8(record.data.unwrap_or_default()).map_err(|e| {
@@ -263,44 +430,78 @@ pub async fn copy_clipboard_record(app: tauri::AppHandle, id: i32) -> Result<(),
         return Err(AppError::NotFound.into());
     };
 
+    let formats = db::service::clipboard_formats::load_formats(&db.conn, &record)
+        .await
+        .map_err(|e| {
+            error!("copy_clipboard_record load formats failed: id={id}, error={e}");
+            AppError::from(e)
+        })?;
+
     match record.r#type {
         t if t == ClipboardType::Text as i32 => {
-            let data = String::from_utf8(record.data.unwrap_or_default()).map_err(|e| {
-                error!("copy_clipboard_record utf8 decode failed: id={id}, type=text, error={e}");
-                AppError::from(e)
-            })?;
-            tauri_plugin_clipboard_x::write_text(data)
-                .await
-                .map_err(|e| {
-                    error!("copy_clipboard_record write text failed: id={id}, error={e}");
-                    AppError::InvalidInput(e.to_string())
+            if !formats.is_empty() {
+                write_rich_text_to_clipboard(formats).await.map_err(|e| {
+                    error!("copy_clipboard_record write rich text failed: id={id}, error={e}");
+                    AppError::InvalidInput(e)
                 })?;
+            } else {
+                let data = String::from_utf8(record.data.unwrap_or_default()).map_err(|e| {
+                    error!(
+                        "copy_clipboard_record utf8 decode failed: id={id}, type=text, error={e}"
+                    );
+                    AppError::from(e)
+                })?;
+                tauri_plugin_clipboard_x::write_text(data)
+                    .await
+                    .map_err(|e| {
+                        error!("copy_clipboard_record write text failed: id={id}, error={e}");
+                        AppError::InvalidInput(e.to_string())
+                    })?;
+            }
         }
         t if t == ClipboardType::Html as i32 => {
-            let html = String::from_utf8(record.data.unwrap_or_default()).map_err(|e| {
-                error!("copy_clipboard_record utf8 decode failed: id={id}, type=html, error={e}");
-                AppError::from(e)
-            })?;
-            let text = html_to_plain_text(&html);
-            tauri_plugin_clipboard_x::write_html(text, html)
-                .await
-                .map_err(|e| {
-                    error!("copy_clipboard_record write html failed: id={id}, error={e}");
-                    AppError::InvalidInput(e.to_string())
+            if !formats.is_empty() {
+                write_rich_text_to_clipboard(formats).await.map_err(|e| {
+                    error!("copy_clipboard_record write rich text failed: id={id}, error={e}");
+                    AppError::InvalidInput(e)
                 })?;
+            } else {
+                let html = String::from_utf8(record.data.unwrap_or_default()).map_err(|e| {
+                    error!(
+                        "copy_clipboard_record utf8 decode failed: id={id}, type=html, error={e}"
+                    );
+                    AppError::from(e)
+                })?;
+                let text = html_to_plain_text(&html);
+                tauri_plugin_clipboard_x::write_html(text, html)
+                    .await
+                    .map_err(|e| {
+                        error!("copy_clipboard_record write html failed: id={id}, error={e}");
+                        AppError::InvalidInput(e.to_string())
+                    })?;
+            }
         }
         t if t == ClipboardType::Rtf as i32 => {
-            let rtf = String::from_utf8(record.data.unwrap_or_default()).map_err(|e| {
-                error!("copy_clipboard_record utf8 decode failed: id={id}, type=rtf, error={e}");
-                AppError::from(e)
-            })?;
-            let text = rtf_to_plain_text(&rtf);
-            tauri_plugin_clipboard_x::write_rtf(text, rtf)
-                .await
-                .map_err(|e| {
-                    error!("copy_clipboard_record write rtf failed: id={id}, error={e}");
-                    AppError::InvalidInput(e.to_string())
+            if !formats.is_empty() {
+                write_rich_text_to_clipboard(formats).await.map_err(|e| {
+                    error!("copy_clipboard_record write rich text failed: id={id}, error={e}");
+                    AppError::InvalidInput(e)
                 })?;
+            } else {
+                let rtf = String::from_utf8(record.data.unwrap_or_default()).map_err(|e| {
+                    error!(
+                        "copy_clipboard_record utf8 decode failed: id={id}, type=rtf, error={e}"
+                    );
+                    AppError::from(e)
+                })?;
+                let text = rtf_to_plain_text(&rtf);
+                tauri_plugin_clipboard_x::write_rtf(text, rtf)
+                    .await
+                    .map_err(|e| {
+                        error!("copy_clipboard_record write rtf failed: id={id}, error={e}");
+                        AppError::InvalidInput(e.to_string())
+                    })?;
+            }
         }
         t if t == ClipboardType::Image as i32 => {
             let path = String::from_utf8(record.data.unwrap_or_default()).map_err(|e| {

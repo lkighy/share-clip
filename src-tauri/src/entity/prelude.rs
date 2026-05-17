@@ -2,6 +2,7 @@
 #![allow(unused_imports)]
 
 pub use super::clipboard_record::Entity as ClipboardRecord;
+pub use super::clipboard_record_format::Entity as ClipboardRecordFormat;
 pub use super::connection_log::Entity as ConnectionLog;
 pub use super::inbound_connections::Entity as InboundConnections;
 pub use super::local_file_index::Entity as LocalFileIndex;

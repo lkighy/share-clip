@@ -18,6 +18,15 @@ pub fn inject(content: InjectContent) -> Result<()> {
         InjectContent::Rtf(rtf) => {
             set_rtf(rtf)?;
         }
+        InjectContent::RichText(formats) => {
+            if let Some(html) = formats.html {
+                set_html(html)?;
+            } else if let Some(rtf) = formats.rtf {
+                set_rtf(rtf)?;
+            } else {
+                clipboard.set_text(formats.text.unwrap_or_default())?;
+            }
+        }
         InjectContent::Image(bytes) => {
             use image::load_from_memory;
             let img = load_from_memory(&bytes)?.to_rgba8();

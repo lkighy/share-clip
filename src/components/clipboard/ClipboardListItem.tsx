@@ -16,6 +16,8 @@ import {
   Folder,
   Files,
   CheckCircle2,
+  ClipboardPaste,
+  ChevronRight,
 } from 'lucide-react';
 
 import { ClipboardResponseModel, ClipboardType } from '@/models/clipboardRecord.ts';
@@ -26,6 +28,10 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import {
@@ -71,12 +77,24 @@ const TypeNameMap: Record<ClipboardType, string> = {
   [ClipboardType.Folder]: '文件夹',
 };
 
+const FORMAT_TEXT = 'text/plain';
+const FORMAT_HTML = 'text/html';
+const FORMAT_RTF = 'text/rtf';
+
+const FormatNameMap: Record<string, string> = {
+  [FORMAT_TEXT]: '纯文本',
+  [FORMAT_HTML]: 'HTML',
+  [FORMAT_RTF]: 'RTF',
+};
+
 interface ClipboardListItemProps {
   item: ClipboardResponseModel;
   onClick?: (id: number) => void;
   onFavoriteToggle?: (id: number, current: boolean) => void;
   onShareToggle?: (id: number, current: boolean) => void;
   onCopy?: (id: number) => void;
+  onCopyAs?: (id: number, format: string, asText: boolean) => void;
+  onPasteAs?: (id: number, format: string, asText: boolean) => void;
   onDelete?: (id: number) => void;
   className?: string;
 }
@@ -87,6 +105,8 @@ export const ClipboardListItem: React.FC<ClipboardListItemProps> = ({
   onFavoriteToggle,
   onShareToggle,
   onCopy,
+  onCopyAs,
+  onPasteAs,
   onDelete,
   className = '',
 }) => {
@@ -102,10 +122,13 @@ export const ClipboardListItem: React.FC<ClipboardListItemProps> = ({
       isShared,
       isValid,
       fileItems,
+      availableFormats,
   } = item;
 
   const TypeIcon = TypeIconMap[type] || FileText;
   const typeName = TypeNameMap[type] || '未知';
+  const selectableFormats = availableFormats.filter((format) => [FORMAT_TEXT, FORMAT_HTML, FORMAT_RTF].includes(format));
+  const hasMultipleFormats = selectableFormats.length > 1;
 
   const renderPreview = () => {
     if ((type === ClipboardType.File || type === ClipboardType.Folder) && fileItems?.length) {
@@ -192,6 +215,16 @@ export const ClipboardListItem: React.FC<ClipboardListItemProps> = ({
   const handleCopy = (e: React.MouseEvent) => {
     e.stopPropagation();
     onCopy?.(id);
+  };
+
+  const handleCopyAs = (format: string, asText: boolean) => (e: Event) => {
+    e.stopPropagation();
+    onCopyAs?.(id, format, asText);
+  };
+
+  const handlePasteAs = (format: string, asText: boolean) => (e: Event) => {
+    e.stopPropagation();
+    onPasteAs?.(id, format, asText);
   };
 
   const handleDelete = (e: React.MouseEvent) => {
@@ -318,6 +351,63 @@ export const ClipboardListItem: React.FC<ClipboardListItemProps> = ({
                           <Copy size={14} className="mr-2" />
                           复制内容
                         </DropdownMenuItem>
+                      ) : null}
+                      {hasMultipleFormats && (onPasteAs || onCopyAs) ? (
+                        <>
+                          <DropdownMenuSeparator />
+                          {onPasteAs ? (
+                            <DropdownMenuSub>
+                              <DropdownMenuSubTrigger disabled={!isValid} className="justify-between">
+                                <span className="flex items-center">
+                                  <ClipboardPaste size={14} className="mr-2" />
+                                  粘贴为
+                                </span>
+                                <ChevronRight size={14} />
+                              </DropdownMenuSubTrigger>
+                              <DropdownMenuSubContent>
+                                {selectableFormats.map((format) => (
+                                  <DropdownMenuItem key={`paste-${format}`} onSelect={handlePasteAs(format, false)}>
+                                    {FormatNameMap[format] ?? format}
+                                  </DropdownMenuItem>
+                                ))}
+                                {(availableFormats.includes(FORMAT_HTML) || availableFormats.includes(FORMAT_RTF)) ? (
+                                  <>
+                                    <DropdownMenuSeparator />
+                                    <DropdownMenuItem onSelect={handlePasteAs(FORMAT_TEXT, false)}>
+                                      格式转纯文本
+                                    </DropdownMenuItem>
+                                  </>
+                                ) : null}
+                              </DropdownMenuSubContent>
+                            </DropdownMenuSub>
+                          ) : null}
+                          {onCopyAs ? (
+                            <DropdownMenuSub>
+                              <DropdownMenuSubTrigger disabled={!isValid} className="justify-between">
+                                <span className="flex items-center">
+                                  <Copy size={14} className="mr-2" />
+                                  复制为
+                                </span>
+                                <ChevronRight size={14} />
+                              </DropdownMenuSubTrigger>
+                              <DropdownMenuSubContent>
+                                {selectableFormats.map((format) => (
+                                  <DropdownMenuItem key={`copy-${format}`} onSelect={handleCopyAs(format, format !== FORMAT_TEXT)}>
+                                    {format === FORMAT_TEXT ? '纯文本' : `${FormatNameMap[format] ?? format} 源码`}
+                                  </DropdownMenuItem>
+                                ))}
+                                {(availableFormats.includes(FORMAT_HTML) || availableFormats.includes(FORMAT_RTF)) ? (
+                                  <>
+                                    <DropdownMenuSeparator />
+                                    <DropdownMenuItem onSelect={handleCopyAs(FORMAT_TEXT, false)}>
+                                      格式转纯文本
+                                    </DropdownMenuItem>
+                                  </>
+                                ) : null}
+                              </DropdownMenuSubContent>
+                            </DropdownMenuSub>
+                          ) : null}
+                        </>
                       ) : null}
                       {/*<DropdownMenuItem*/}
                       {/*    onClick={handleShare}*/}

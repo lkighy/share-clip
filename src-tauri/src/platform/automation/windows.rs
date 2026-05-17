@@ -5,6 +5,7 @@ use enigo::Direction::{Click, Press, Release};
 use enigo::{Enigo, Key, Keyboard, Settings};
 use std::path::PathBuf;
 
+use crate::db::service::clipboard_formats::ClipboardFormats;
 use crate::platform::automation::InjectContent;
 use crate::utils::text::{html_to_plain_text, rtf_to_plain_text};
 
@@ -35,6 +36,7 @@ fn set_clipboard(content: InjectContent) -> Result<()> {
         InjectContent::Text(text) => set_text(text),
         InjectContent::Html(html) => set_html(html),
         InjectContent::Rtf(rtf) => set_rtf(rtf),
+        InjectContent::RichText(formats) => set_rich_text(formats),
         InjectContent::Image(bytes) => set_image(bytes),
         InjectContent::Files(files) => set_files(files),
     }
@@ -68,6 +70,30 @@ fn set_rtf(rtf: String) -> Result<()> {
         ClipboardContent::Rtf(rtf),
     ])
     .map_err(|e| anyhow!(e.to_string()))?;
+    Ok(())
+}
+
+fn set_rich_text(formats: ClipboardFormats) -> Result<()> {
+    let ctx = ClipboardContext::new().map_err(|e| anyhow!(e.to_string()))?;
+    let mut contents = Vec::with_capacity(3);
+
+    if let Some(text) = formats.text.or_else(|| {
+        formats
+            .html
+            .as_ref()
+            .map(|html| html_to_plain_text(html))
+            .or_else(|| formats.rtf.as_ref().map(|rtf| rtf_to_plain_text(rtf)))
+    }) {
+        contents.push(ClipboardContent::Text(text));
+    }
+    if let Some(html) = formats.html {
+        contents.push(ClipboardContent::Html(html));
+    }
+    if let Some(rtf) = formats.rtf {
+        contents.push(ClipboardContent::Rtf(rtf));
+    }
+
+    ctx.set(contents).map_err(|e| anyhow!(e.to_string()))?;
     Ok(())
 }
 

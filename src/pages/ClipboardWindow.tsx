@@ -12,10 +12,12 @@ import { ClipboardResponseModel, ClipboardType } from "@/models/clipboardRecord.
 import { saveAppConfig } from "@/store/appConfigStore";
 import {
   copyItem,
+  copyItemAs,
   getClipboardRecordList,
   handleFavoriteToggle,
   handleShareToggle,
   pasteItem,
+  pasteItemAs,
   removeItem,
 } from "@/service/clipboardRecordService.ts";
 import { operationWindow } from "@/api/window.ts";
@@ -35,6 +37,8 @@ import {
 type ClipboardSource = "local" | `remote:${string}`;
 
 const AUTH_STATUS_APPROVED = 2;
+const FORMAT_HTML = "text/html";
+const FORMAT_RTF = "text/rtf";
 
 function normalizeBaseUrl(raw: string) {
   let value = raw.trim();
@@ -80,6 +84,37 @@ function remotePayload(content: RemoteClipboardContent) {
 
 function isRemoteFileClipboard(content: RemoteClipboardContent) {
   return content.type === ClipboardType.File || content.type === ClipboardType.Folder;
+}
+
+function remotePayloadForFormat(content: RemoteClipboardContent, format: string, asText: boolean) {
+  if (format === FORMAT_HTML && content.html) {
+    return {
+      type: asText ? ClipboardType.Text : ClipboardType.Html,
+      text: asText ? content.html : content.text ?? null,
+      html: asText ? null : content.html,
+      rtf: null,
+      image_base64: null,
+      files: null,
+    };
+  }
+  if (format === FORMAT_RTF && content.rtf) {
+    return {
+      type: asText ? ClipboardType.Text : ClipboardType.Rtf,
+      text: asText ? content.rtf : content.text ?? null,
+      html: null,
+      rtf: asText ? null : content.rtf,
+      image_base64: null,
+      files: null,
+    };
+  }
+  return {
+    type: ClipboardType.Text,
+    text: content.text ?? "",
+    html: null,
+    rtf: null,
+    image_base64: null,
+    files: null,
+  };
 }
 
 function ClipboardWindow() {
@@ -206,6 +241,44 @@ function ClipboardWindow() {
     } catch (error) {
       console.error(error);
       toast.error("复制失败");
+    }
+  };
+
+  const handlePasteAs = async (id: number, format: string, asText: boolean) => {
+    try {
+      if (source === "local") {
+        await pasteItemAs(id, format, asText);
+        return;
+      }
+      if (!activeRemote || !localDevice) {
+        toast.error("远程设备未准备好");
+        return;
+      }
+      const content = await fetchRemoteClipboardContent(activeRemote, localDevice, id);
+      await pasteRemoteClipboardContent(remotePayloadForFormat(content, format, asText));
+    } catch (error) {
+      console.error(error);
+      toast.error("按格式粘贴失败");
+    }
+  };
+
+  const handleCopyAs = async (id: number, format: string, asText: boolean) => {
+    try {
+      if (source === "local") {
+        await copyItemAs(id, format, asText);
+        toast.success("已复制到剪切板");
+        return;
+      }
+      if (!activeRemote || !localDevice) {
+        toast.error("远程设备未准备好");
+        return;
+      }
+      const content = await fetchRemoteClipboardContent(activeRemote, localDevice, id);
+      await copyRemoteClipboardContent(remotePayloadForFormat(content, format, asText));
+      toast.success("已复制到本机剪切板");
+    } catch (error) {
+      console.error(error);
+      toast.error("按格式复制失败");
     }
   };
 
@@ -474,6 +547,8 @@ function ClipboardWindow() {
               item={item}
               onClick={handlePaste}
               onCopy={handleCopy}
+              onCopyAs={handleCopyAs}
+              onPasteAs={handlePasteAs}
               onFavoriteToggle={source === "local" ? handleFavorite : undefined}
               onShareToggle={source === "local" ? handleShare : undefined}
               onDelete={source === "local" ? handleDelete : undefined}

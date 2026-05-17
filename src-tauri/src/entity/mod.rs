@@ -3,6 +3,7 @@
 pub mod prelude;
 
 pub mod clipboard_record;
+pub mod clipboard_record_format;
 #[allow(dead_code)]
 pub mod connection_log;
 #[allow(dead_code)]

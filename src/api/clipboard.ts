@@ -13,9 +13,17 @@ export function setClipboardContent(id: number) {
     return call("paste_clipboard_record", {id})
 }
 
+export function setClipboardContentAs(id: number, format: string, asText: boolean) {
+    return call("paste_clipboard_record_as", {payload: {id, format, asText}})
+}
+
 // 复制事件
 export function copyClipboardContent(id: number) {
     return call("copy_clipboard_record", {id})
+}
+
+export function copyClipboardContentAs(id: number, format: string, asText: boolean) {
+    return call("copy_clipboard_record_as", {payload: {id, format, asText}})
 }
 
 // 收藏

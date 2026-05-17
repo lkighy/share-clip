@@ -5,6 +5,7 @@ use sea_orm::{ActiveModelTrait, ColumnTrait, DbErr, EntityTrait, ModelTrait, Que
 use uuid::Uuid;
 
 use crate::db::repository::clipboard_record;
+use crate::db::service::clipboard_formats;
 use crate::db::service::local_files::{
     cleanup_orphaned_clipboard_local_files, has_clipboard_source, has_direct_source,
     parse_source_clipboard_ids, source_type_after_adding_clipboard,
@@ -33,10 +34,11 @@ pub async fn list_records(
             e
         })?;
 
-    Ok(rows
-        .into_iter()
-        .map(clipboard_response_from_model)
-        .collect())
+    let mut responses = Vec::with_capacity(rows.len());
+    for row in rows {
+        responses.push(clipboard_response_from_model_with_db(&db.conn, row).await?);
+    }
+    Ok(responses)
 }
 
 pub fn clipboard_response_from_model(record: Model) -> ClipboardResponse {
@@ -55,7 +57,22 @@ pub fn clipboard_response_from_model(record: Model) -> ClipboardResponse {
         is_shared: record.is_shared,
         is_valid: record.is_valid,
         file_items,
+        available_formats: clipboard_formats::legacy_format_name(record.r#type)
+            .into_iter()
+            .collect(),
     }
+}
+
+pub async fn clipboard_response_from_model_with_db(
+    db: &sea_orm::DatabaseConnection,
+    record: Model,
+) -> Result<ClipboardResponse, DbErr> {
+    let mut response = clipboard_response_from_model(record.clone());
+    let formats = clipboard_formats::list_format_names(db, record.id).await?;
+    if !formats.is_empty() {
+        response.available_formats = formats;
+    }
+    Ok(response)
 }
 
 fn build_clipboard_file_items(record: &Model) -> Option<Vec<ClipboardFileItem>> {

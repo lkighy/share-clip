@@ -13,6 +13,7 @@ export interface ClipboardResponseModel {
     isShared: boolean
     isValid: boolean
     fileItems?: ClipboardFileItemModel[]
+    availableFormats: string[]
 }
 
 export interface ClipboardFileItemModel {

@@ -23,8 +23,11 @@ pub struct AppClipboardHandler {
 #[derive(Debug, Clone)]
 pub enum ClipboardChangeEvent {
     Text(String),
-    Html(String),
-    Rtf(String),
+    RichText {
+        text: Option<String>,
+        html: Option<String>,
+        rtf: Option<String>,
+    },
     Image,
     Files {
         files: Vec<String>,
@@ -93,7 +96,7 @@ impl ClipboardHandler for AppClipboardHandler {
         info!("[Watcher] clipboard changed.");
 
         if let Ok(ctx) = ClipboardContext::new() {
-            // Priority: Files -> Image -> Html -> Rtf -> Text.
+            // Priority: Files -> rich text/text bundle -> Image.
             if ctx.has(ContentFormat::Files) {
                 let files = ctx.get_files().unwrap_or_default();
                 let mut file_count = 0usize;
@@ -117,30 +120,34 @@ impl ClipboardHandler for AppClipboardHandler {
                 return;
             }
 
-            if ctx.has(ContentFormat::Image) {
-                let _ = self.tx.send(ClipboardChangeEvent::Image);
-                return;
-            }
+            let has_text = ctx.has(ContentFormat::Text);
+            let has_html = ctx.has(ContentFormat::Html);
+            let has_rtf = ctx.has(ContentFormat::Rtf);
+            if has_text || has_html || has_rtf {
+                let text = if has_text { ctx.get_text().ok() } else { None };
+                let html = if has_html { ctx.get_html().ok() } else { None };
+                let rtf = if has_rtf {
+                    ctx.get_rich_text().ok()
+                } else {
+                    None
+                };
 
-            if ctx.has(ContentFormat::Html) {
-                if let Ok(html) = ctx.get_html() {
-                    let _ = self.tx.send(ClipboardChangeEvent::Html(html));
+                if html.is_some() || rtf.is_some() {
+                    let _ = self
+                        .tx
+                        .send(ClipboardChangeEvent::RichText { text, html, rtf });
                     return;
                 }
-            }
 
-            if ctx.has(ContentFormat::Rtf) {
-                if let Ok(rtf) = ctx.get_rich_text() {
-                    let _ = self.tx.send(ClipboardChangeEvent::Rtf(rtf));
-                    return;
-                }
-            }
-
-            if ctx.has(ContentFormat::Text) {
-                if let Ok(text) = ctx.get_text() {
+                if let Some(text) = text {
                     let _ = self.tx.send(ClipboardChangeEvent::Text(text));
                     return;
                 }
+            }
+
+            if ctx.has(ContentFormat::Image) {
+                let _ = self.tx.send(ClipboardChangeEvent::Image);
+                return;
             }
 
             let formats = ctx.available_formats().unwrap_or_default();

@@ -9,6 +9,7 @@ use tauri::Manager;
 use uuid::Uuid;
 
 use crate::app::config::AppConfigStore;
+use crate::db::service::clipboard_formats::{self, ClipboardFormats};
 use crate::db::service::local_files::{
     has_direct_source, parse_source_clipboard_ids, source_type_after_adding_clipboard,
     SHARE_MODE_MANUAL, SHARE_MODE_TEMP, SOURCE_CLIPBOARD,
@@ -19,7 +20,6 @@ use crate::models::clipboard::ClipboardType;
 use crate::services::clipboard_watcher::ClipboardChangeEvent;
 use crate::utils::format::{generate_image_thumbnail, normalize_file_uri};
 use crate::utils::image::format_file_size;
-use crate::utils::text::{html_to_plain_text, rtf_to_plain_text};
 
 type StorageResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
@@ -32,7 +32,7 @@ pub async fn save_clipboard_item(
     let db = &app_handle.state::<DbState>().conn;
     let config = app_handle.state::<AppConfigStore>().get();
 
-    let (type_code, data, preview, hash, size) = match event {
+    let (type_code, data, preview, hash, size, formats) = match event {
         ClipboardChangeEvent::Text(content) => {
             let data_bytes = content.into_bytes();
             let preview =
@@ -45,34 +45,22 @@ pub async fn save_clipboard_item(
                 Some(preview),
                 hash,
                 size,
+                None,
             )
         }
-        ClipboardChangeEvent::Html(content) => {
-            let data_bytes = content.into_bytes();
-            let preview =
-                preview_from_plain_text(&html_to_plain_text(&String::from_utf8_lossy(&data_bytes)));
-            let size = data_bytes.len() as i64;
-            let hash = hash_bytes(&data_bytes);
+        ClipboardChangeEvent::RichText { text, html, rtf } => {
+            let formats = ClipboardFormats { text, html, rtf };
+            let data_bytes = formats.primary_data();
+            let preview = preview_from_plain_text(&formats.primary_text());
+            let size = formats.total_size();
+            let hash = formats.combined_hash();
             (
-                i32::from(ClipboardType::Html),
+                i32::from(formats.primary_type()),
                 Some(data_bytes),
                 preview,
                 hash,
                 size,
-            )
-        }
-        ClipboardChangeEvent::Rtf(content) => {
-            let data_bytes = content.into_bytes();
-            let size = data_bytes.len() as i64;
-            let hash = hash_bytes(&data_bytes);
-            let preview =
-                preview_from_plain_text(&rtf_to_plain_text(&String::from_utf8_lossy(&data_bytes)));
-            (
-                i32::from(ClipboardType::Rtf),
-                Some(data_bytes),
-                preview,
-                hash,
-                size,
+                Some(formats),
             )
         }
         ClipboardChangeEvent::Image => {
@@ -87,6 +75,7 @@ pub async fn save_clipboard_item(
                 preview,
                 hash,
                 size,
+                None,
             )
         }
         ClipboardChangeEvent::Files {
@@ -126,6 +115,7 @@ pub async fn save_clipboard_item(
                 Some(preview),
                 hash,
                 size,
+                None,
             )
         }
         ClipboardChangeEvent::Unknown { formats } => {
@@ -153,6 +143,7 @@ pub async fn save_clipboard_item(
 
     let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
 
+    let mut inserted_new_record = false;
     let saved_record = if let Some(existing_model) = existing {
         let existing_id = existing_model.id;
         let mut active: clipboard_record::ActiveModel = existing_model.into();
@@ -163,6 +154,7 @@ pub async fn save_clipboard_item(
             .await?
             .ok_or("updated clipboard record not found")?
     } else {
+        inserted_new_record = true;
         let new_item = clipboard_record::ActiveModel {
             r#type: Set(type_code),
             data: Set(data),
@@ -179,6 +171,14 @@ pub async fn save_clipboard_item(
         };
         new_item.insert(db).await?
     };
+
+    if let Some(formats) = formats.as_ref() {
+        if inserted_new_record
+            || !clipboard_formats::has_stored_formats(db, saved_record.id).await?
+        {
+            clipboard_formats::save_formats(db, saved_record.id, formats).await?;
+        }
+    }
 
     if saved_record.is_shared == 1 {
         upsert_temp_local_files_for_clipboard(db, &saved_record).await?;

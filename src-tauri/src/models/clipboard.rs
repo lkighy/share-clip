@@ -58,4 +58,5 @@ pub struct ClipboardResponse {
     pub is_shared: i32,
     pub is_valid: i32,
     pub file_items: Option<Vec<ClipboardFileItem>>,
+    pub available_formats: Vec<String>,
 }

@@ -106,8 +106,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             clipboard::clipboard_record_list,
             clipboard::paste_clipboard_record,
+            clipboard::paste_clipboard_record_as,
             clipboard::paste_remote_clipboard_content,
             clipboard::copy_clipboard_record,
+            clipboard::copy_clipboard_record_as,
             clipboard::copy_remote_clipboard_content,
             clipboard::toggle_favorite,
             clipboard::toggle_share,

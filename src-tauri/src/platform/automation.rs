@@ -1,3 +1,4 @@
+use crate::db::service::clipboard_formats::ClipboardFormats;
 use anyhow::Result;
 use std::path::PathBuf;
 
@@ -5,6 +6,7 @@ pub enum InjectContent {
     Text(String),
     Html(String),
     Rtf(String),
+    RichText(ClipboardFormats),
     Image(Vec<u8>),
     Files(Vec<PathBuf>),
 }

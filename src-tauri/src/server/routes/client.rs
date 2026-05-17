@@ -427,12 +427,22 @@ async fn list_client_clipboard(
         }
     };
 
-    Json(
-        rows.into_iter()
-            .map(crate::db::service::clipboard::clipboard_response_from_model)
-            .collect::<Vec<_>>(),
-    )
-    .into_response()
+    let mut responses = Vec::with_capacity(rows.len());
+    for row in rows {
+        match crate::db::service::clipboard::clipboard_response_from_model_with_db(&state.db, row)
+            .await
+        {
+            Ok(response) => responses.push(response),
+            Err(e) => {
+                return json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("database error: {e}"),
+                )
+            }
+        }
+    }
+
+    Json(responses).into_response()
 }
 
 async fn get_client_clipboard_content(
@@ -860,11 +870,32 @@ async fn clipboard_content_response(
     };
 
     if record.r#type == ClipboardType::Text as i32 {
-        response.text = Some(bytes_to_string(record.data.clone())?);
+        let formats = crate::db::service::clipboard_formats::load_formats(db, record)
+            .await
+            .map_err(|e| format!("database error: {e}"))?;
+        response.text = formats
+            .text
+            .or_else(|| Some(bytes_to_string(record.data.clone()).unwrap_or_default()));
+        response.html = formats.html;
+        response.rtf = formats.rtf;
     } else if record.r#type == ClipboardType::Html as i32 {
-        response.html = Some(bytes_to_string(record.data.clone())?);
+        let formats = crate::db::service::clipboard_formats::load_formats(db, record)
+            .await
+            .map_err(|e| format!("database error: {e}"))?;
+        response.text = formats.text;
+        response.html = formats
+            .html
+            .or_else(|| Some(bytes_to_string(record.data.clone()).unwrap_or_default()));
+        response.rtf = formats.rtf;
     } else if record.r#type == ClipboardType::Rtf as i32 {
-        response.rtf = Some(bytes_to_string(record.data.clone())?);
+        let formats = crate::db::service::clipboard_formats::load_formats(db, record)
+            .await
+            .map_err(|e| format!("database error: {e}"))?;
+        response.text = formats.text;
+        response.html = formats.html;
+        response.rtf = formats
+            .rtf
+            .or_else(|| Some(bytes_to_string(record.data.clone()).unwrap_or_default()));
     } else if record.r#type == ClipboardType::Image as i32 {
         let path = bytes_to_string(record.data.clone())?;
         let bytes = tokio::fs::read(normalize_file_uri(&path))

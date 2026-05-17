@@ -17,6 +17,7 @@ export interface ClipboardResponse {
   is_shared: number;
   is_valid: number,
   file_items?: ClipboardFileItem[];
+  available_formats?: string[];
 }
 
 export interface ClipboardFileItem {
