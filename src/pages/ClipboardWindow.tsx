@@ -39,6 +39,43 @@ type ClipboardSource = "local" | `remote:${string}`;
 const AUTH_STATUS_APPROVED = 2;
 const FORMAT_HTML = "text/html";
 const FORMAT_RTF = "text/rtf";
+const REMOTE_FETCH_TIMEOUT_MS = 8_000;
+const REMOTE_COPY_REFRESH_DELAY_MS = 700;
+
+function isTimeoutError(error: unknown) {
+  return error instanceof DOMException && error.name === "TimeoutError";
+}
+
+function isAbortError(error: unknown) {
+  return error instanceof DOMException && error.name === "AbortError";
+}
+
+async function fetchWithTimeout(input: Parameters<typeof fetch>[0], init: RequestInit = {}, timeoutMs = REMOTE_FETCH_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => {
+    controller.abort(new DOMException("远程请求超时", "TimeoutError"));
+  }, timeoutMs);
+
+  const abortFromParent = () => {
+    controller.abort(init.signal?.reason ?? new DOMException("远程请求已取消", "AbortError"));
+  };
+
+  if (init.signal?.aborted) {
+    abortFromParent();
+  } else {
+    init.signal?.addEventListener("abort", abortFromParent, { once: true });
+  }
+
+  try {
+    return await fetch(input, {
+      ...init,
+      signal: controller.signal,
+    });
+  } finally {
+    window.clearTimeout(timeoutId);
+    init.signal?.removeEventListener("abort", abortFromParent);
+  }
+}
 
 function normalizeBaseUrl(raw: string) {
   let value = raw.trim();
@@ -53,19 +90,21 @@ function remoteAuthHeaders(localDevice: LocalDeviceInfo) {
   };
 }
 
-async function fetchRemoteClipboardList(remote: RemoteShareUser, localDevice: LocalDeviceInfo, page: number, pageSize: number) {
+async function fetchRemoteClipboardList(remote: RemoteShareUser, localDevice: LocalDeviceInfo, page: number, pageSize: number, signal?: AbortSignal) {
   const baseUrl = normalizeBaseUrl(remote.ip);
-  const response = await fetch(`${baseUrl}/api/client/clipboard/list?page=${page}&page_size=${pageSize}`, {
+  const response = await fetchWithTimeout(`${baseUrl}/api/client/clipboard/list?page=${page}&page_size=${pageSize}`, {
     headers: remoteAuthHeaders(localDevice),
+    signal,
   });
   if (!response.ok) throw new Error(`加载远程剪贴板失败: HTTP ${response.status}`);
   return ((await response.json()) as ClipboardResponse[]).map(mapClipboardRecord);
 }
 
-async function fetchRemoteClipboardContent(remote: RemoteShareUser, localDevice: LocalDeviceInfo, id: number) {
+async function fetchRemoteClipboardContent(remote: RemoteShareUser, localDevice: LocalDeviceInfo, id: number, signal?: AbortSignal) {
   const baseUrl = normalizeBaseUrl(remote.ip);
-  const response = await fetch(`${baseUrl}/api/client/clipboard/${encodeURIComponent(id)}/content`, {
+  const response = await fetchWithTimeout(`${baseUrl}/api/client/clipboard/${encodeURIComponent(id)}/content`, {
     headers: remoteAuthHeaders(localDevice),
+    signal,
   });
   if (!response.ok) throw new Error(`读取远程剪贴板失败: HTTP ${response.status}`);
   return (await response.json()) as RemoteClipboardContent;
@@ -84,6 +123,12 @@ function remotePayload(content: RemoteClipboardContent) {
 
 function isRemoteFileClipboard(content: RemoteClipboardContent) {
   return content.type === ClipboardType.File || content.type === ClipboardType.Folder;
+}
+
+function remoteForSource(source: ClipboardSource, users: RemoteShareUser[]) {
+  return source.startsWith("remote:")
+    ? users.find((user) => `remote:${user.user_id}` === source) ?? null
+    : null;
 }
 
 function remotePayloadForFormat(content: RemoteClipboardContent, format: string, asText: boolean) {
@@ -123,61 +168,157 @@ function ClipboardWindow() {
   const [data, setData] = useState<ClipboardResponseModel[]>([]);
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(true);
-  const [loading, setLoading] = useState(false);
+  const [localLoading, setLocalLoading] = useState(false);
+  const [remoteLoading, setRemoteLoading] = useState(false);
   const [source, setSource] = useState<ClipboardSource>("local");
   const [remoteUsers, setRemoteUsers] = useState<RemoteShareUser[]>([]);
   const [localDevice, setLocalDevice] = useState<LocalDeviceInfo | null>(null);
+  const [initialized, setInitialized] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const resizeTimeoutRef = useRef<number | null>(null);
   const lastWindowSizeRef = useRef<{ width: number; height: number } | null>(null);
+  const localRequestIdRef = useRef(0);
+  const remoteRequestIdRef = useRef(0);
+  const remoteListAbortRef = useRef<AbortController | null>(null);
+  const remoteContentAbortRef = useRef<AbortController | null>(null);
+  const localRefreshTimerRef = useRef<number | null>(null);
   const refreshRecordsRef = useRef<() => Promise<void>>(async () => undefined);
   const loadRemoteUsersRef = useRef<() => Promise<RemoteShareUser[]>>(async () => []);
   const sourceRef = useRef<ClipboardSource>("local");
-  const activeRemote = source.startsWith("remote:")
-    ? remoteUsers.find((user) => `remote:${user.user_id}` === source)
-    : null;
+  const activeRemote = remoteForSource(source, remoteUsers);
   const approvedRemoteUsers = remoteUsers.filter((user) => user.auth_status === AUTH_STATUS_APPROVED);
   const sourceLabel = activeRemote?.user_name ?? "本机剪切板";
+  const loading = source === "local" ? localLoading : remoteLoading;
   sourceRef.current = source;
 
-  const loadRemoteUsers = async () => {
-    const users = await listRemoteShareUsers();
-    setRemoteUsers(users);
-    const current = sourceRef.current;
-    if (current.startsWith("remote:") && !users.some((user) => `remote:${user.user_id}` === current && user.auth_status === AUTH_STATUS_APPROVED)) {
-      setSource("local");
-    }
-    return users;
+  const abortRemoteListRequest = () => {
+    remoteListAbortRef.current?.abort(new DOMException("远程列表请求已取消", "AbortError"));
+    remoteListAbortRef.current = null;
   };
-  loadRemoteUsersRef.current = loadRemoteUsers;
 
-  const refreshRecords = async () => {
-    if (loading) {
-      return;
+  const abortRemoteContentRequest = () => {
+    remoteContentAbortRef.current?.abort(new DOMException("远程内容请求已取消", "AbortError"));
+    remoteContentAbortRef.current = null;
+  };
+
+  const scheduleLocalRefresh = () => {
+    if (sourceRef.current === "local") {
+      void refreshLocalRecords();
     }
 
-    setLoading(true);
+    if (localRefreshTimerRef.current !== null) {
+      window.clearTimeout(localRefreshTimerRef.current);
+    }
+
+    localRefreshTimerRef.current = window.setTimeout(() => {
+      localRefreshTimerRef.current = null;
+      if (sourceRef.current === "local") {
+        void refreshLocalRecords();
+      }
+    }, REMOTE_COPY_REFRESH_DELAY_MS);
+  };
+
+  const loadRemoteClipboardContent = async (remote: RemoteShareUser, device: LocalDeviceInfo, id: number) => {
+    abortRemoteContentRequest();
+    const controller = new AbortController();
+    remoteContentAbortRef.current = controller;
+    try {
+      return await fetchRemoteClipboardContent(remote, device, id, controller.signal);
+    } finally {
+      if (remoteContentAbortRef.current === controller) {
+        remoteContentAbortRef.current = null;
+      }
+    }
+  };
+
+  const resetListState = () => {
+    setData([]);
+    setPage(1);
+    setHasMore(true);
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = 0;
+    }
+  };
+
+  const applyFirstPage = (response: ClipboardResponseModel[]) => {
+    setData(response);
+    setPage(1);
+    setHasMore(response.length === PAGE_SIZE);
+
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = 0;
+    }
+  };
+
+  const refreshLocalRecords = async () => {
+    const requestId = ++localRequestIdRef.current;
+    setLocalLoading(true);
+
+    try {
+      const response = await getClipboardRecordList(1, PAGE_SIZE);
+      if (requestId !== localRequestIdRef.current || sourceRef.current !== "local") {
+        return;
+      }
+      applyFirstPage(response);
+    } catch (error) {
+      if (requestId === localRequestIdRef.current && sourceRef.current === "local") {
+        console.error(error);
+        toast.error("刷新失败");
+      }
+    } finally {
+      if (requestId === localRequestIdRef.current) {
+        setLocalLoading(false);
+      }
+    }
+  };
+
+  const refreshRemoteRecords = async (
+    selectedSource: ClipboardSource = source,
+    users: RemoteShareUser[] = remoteUsers,
+    device: LocalDeviceInfo | null = localDevice,
+  ) => {
+    const requestId = ++remoteRequestIdRef.current;
+    const selectedRemote = remoteForSource(selectedSource, users);
+    abortRemoteListRequest();
+    const controller = new AbortController();
+    remoteListAbortRef.current = controller;
+    setRemoteLoading(true);
 
     try {
       const response =
-        source === "local"
-          ? await getClipboardRecordList(1, PAGE_SIZE)
-          : activeRemote && localDevice
-            ? await fetchRemoteClipboardList(activeRemote, localDevice, 1, PAGE_SIZE)
-            : [];
-      setData(response);
-      setPage(1);
-      setHasMore(response.length === PAGE_SIZE);
-
-      if (scrollRef.current) {
-        scrollRef.current.scrollTop = 0;
+        selectedRemote && device
+          ? await fetchRemoteClipboardList(selectedRemote, device, 1, PAGE_SIZE, controller.signal)
+          : [];
+      if (requestId !== remoteRequestIdRef.current || sourceRef.current !== selectedSource) {
+        return;
       }
+      applyFirstPage(response);
     } catch (error) {
-      console.error(error);
-      toast.error("刷新失败");
+      if (!isAbortError(error) && requestId === remoteRequestIdRef.current && sourceRef.current === selectedSource) {
+        console.error(error);
+        toast.error(isTimeoutError(error) ? "远程设备响应超时" : "刷新失败");
+      }
     } finally {
-      setLoading(false);
+      if (remoteListAbortRef.current === controller) {
+        remoteListAbortRef.current = null;
+      }
+      if (requestId === remoteRequestIdRef.current) {
+        setRemoteLoading(false);
+      }
     }
+  };
+
+  const refreshRecords = async (
+    selectedSource: ClipboardSource = source,
+    users: RemoteShareUser[] = remoteUsers,
+    device: LocalDeviceInfo | null = localDevice,
+  ) => {
+    if (selectedSource === "local") {
+      abortRemoteListRequest();
+      await refreshLocalRecords();
+      return;
+    }
+    await refreshRemoteRecords(selectedSource, users, device);
   };
   refreshRecordsRef.current = refreshRecords;
 
@@ -187,25 +328,73 @@ function ClipboardWindow() {
     }
 
     const nextPage = page + 1;
-    setLoading(true);
+    const selectedSource = source;
+    const requestId = selectedSource === "local" ? ++localRequestIdRef.current : ++remoteRequestIdRef.current;
+    const controller = selectedSource === "local" ? null : new AbortController();
+    const selectedRemote = selectedSource === "local" ? null : activeRemote;
+    const selectedDevice = selectedSource === "local" ? null : localDevice;
+
+    if (controller) {
+      abortRemoteListRequest();
+      remoteListAbortRef.current = controller;
+      setRemoteLoading(true);
+    } else {
+      setLocalLoading(true);
+    }
 
     try {
       const response =
-        source === "local"
+        selectedSource === "local"
           ? await getClipboardRecordList(nextPage, PAGE_SIZE)
-          : activeRemote && localDevice
-            ? await fetchRemoteClipboardList(activeRemote, localDevice, nextPage, PAGE_SIZE)
+          : selectedRemote && selectedDevice
+            ? await fetchRemoteClipboardList(selectedRemote, selectedDevice, nextPage, PAGE_SIZE, controller?.signal)
             : [];
+      const isCurrentRequest = selectedSource === "local"
+        ? requestId === localRequestIdRef.current
+        : requestId === remoteRequestIdRef.current;
+      if (!isCurrentRequest || sourceRef.current !== selectedSource) {
+        return;
+      }
       setData((prev) => [...prev, ...response]);
       setPage(nextPage);
       setHasMore(response.length === PAGE_SIZE);
     } catch (error) {
-      console.error(error);
-      toast.error("加载更多失败");
+      const isCurrentRequest = selectedSource === "local"
+        ? requestId === localRequestIdRef.current
+        : requestId === remoteRequestIdRef.current;
+      if (!isAbortError(error) && isCurrentRequest && sourceRef.current === selectedSource) {
+        console.error(error);
+        toast.error(isTimeoutError(error) ? "远程设备响应超时" : "加载更多失败");
+      }
     } finally {
-      setLoading(false);
+      if (controller && remoteListAbortRef.current === controller) {
+        remoteListAbortRef.current = null;
+      }
+      if (selectedSource === "local" && requestId === localRequestIdRef.current) {
+        setLocalLoading(false);
+      }
+      if (selectedSource !== "local" && requestId === remoteRequestIdRef.current) {
+        setRemoteLoading(false);
+      }
     }
   };
+
+  const loadRemoteUsers = async () => {
+    const users = await listRemoteShareUsers();
+    setRemoteUsers(users);
+    const current = sourceRef.current;
+    if (current.startsWith("remote:") && !users.some((user) => `remote:${user.user_id}` === current && user.auth_status === AUTH_STATUS_APPROVED)) {
+      sourceRef.current = "local";
+      remoteRequestIdRef.current += 1;
+      abortRemoteListRequest();
+      abortRemoteContentRequest();
+      setSource("local");
+      resetListState();
+      void refreshLocalRecords();
+    }
+    return users;
+  };
+  loadRemoteUsersRef.current = loadRemoteUsers;
 
   const handlePaste = async (id: number) => {
     try {
@@ -217,11 +406,14 @@ function ClipboardWindow() {
         toast.error("远程设备未准备好");
         return;
       }
-      const content = await prepareRemoteClipboardContent(await fetchRemoteClipboardContent(activeRemote, localDevice, id));
+      const content = await prepareRemoteClipboardContent(await loadRemoteClipboardContent(activeRemote, localDevice, id));
       await pasteRemoteClipboardContent(remotePayload(content));
     } catch (error) {
+      if (isAbortError(error)) {
+        return;
+      }
       console.error(error);
-      toast.error("粘贴失败");
+      toast.error(isTimeoutError(error) ? "远程设备响应超时" : "粘贴失败");
     }
   };
 
@@ -235,12 +427,16 @@ function ClipboardWindow() {
         toast.error("远程设备未准备好");
         return;
       }
-      const content = await prepareRemoteClipboardContent(await fetchRemoteClipboardContent(activeRemote, localDevice, id));
+      const content = await prepareRemoteClipboardContent(await loadRemoteClipboardContent(activeRemote, localDevice, id));
       await copyRemoteClipboardContent(remotePayload(content));
+      scheduleLocalRefresh();
       toast.success("已复制到本机剪切板");
     } catch (error) {
+      if (isAbortError(error)) {
+        return;
+      }
       console.error(error);
-      toast.error("复制失败");
+      toast.error(isTimeoutError(error) ? "远程设备响应超时" : "复制失败");
     }
   };
 
@@ -254,11 +450,14 @@ function ClipboardWindow() {
         toast.error("远程设备未准备好");
         return;
       }
-      const content = await fetchRemoteClipboardContent(activeRemote, localDevice, id);
+      const content = await loadRemoteClipboardContent(activeRemote, localDevice, id);
       await pasteRemoteClipboardContent(remotePayloadForFormat(content, format, asText));
     } catch (error) {
+      if (isAbortError(error)) {
+        return;
+      }
       console.error(error);
-      toast.error("按格式粘贴失败");
+      toast.error(isTimeoutError(error) ? "远程设备响应超时" : "按格式粘贴失败");
     }
   };
 
@@ -273,12 +472,16 @@ function ClipboardWindow() {
         toast.error("远程设备未准备好");
         return;
       }
-      const content = await fetchRemoteClipboardContent(activeRemote, localDevice, id);
+      const content = await loadRemoteClipboardContent(activeRemote, localDevice, id);
       await copyRemoteClipboardContent(remotePayloadForFormat(content, format, asText));
+      scheduleLocalRefresh();
       toast.success("已复制到本机剪切板");
     } catch (error) {
+      if (isAbortError(error)) {
+        return;
+      }
       console.error(error);
-      toast.error("按格式复制失败");
+      toast.error(isTimeoutError(error) ? "远程设备响应超时" : "按格式复制失败");
     }
   };
 
@@ -351,12 +554,38 @@ function ClipboardWindow() {
   };
 
   const handleRefreshClick = async () => {
+    let users = remoteUsers;
     try {
-      await loadRemoteUsers();
+      users = await loadRemoteUsers();
     } catch (error) {
       console.error(error);
     }
-    await refreshRecords();
+    await refreshRecords(sourceRef.current, users, localDevice);
+  };
+
+  const handleSourceSelect = (nextSource: ClipboardSource) => {
+    if (sourceRef.current === nextSource) {
+      void refreshRecords(nextSource);
+      return;
+    }
+
+    sourceRef.current = nextSource;
+    resetListState();
+    abortRemoteContentRequest();
+
+    if (nextSource === "local") {
+      remoteRequestIdRef.current += 1;
+      abortRemoteListRequest();
+      setRemoteLoading(false);
+      setSource(nextSource);
+      void refreshLocalRecords();
+      return;
+    }
+
+    localRequestIdRef.current += 1;
+    setLocalLoading(false);
+    setSource(nextSource);
+    void refreshRemoteRecords(nextSource);
   };
 
   useEffect(() => {
@@ -365,9 +594,12 @@ function ClipboardWindow() {
         const [device, users] = await Promise.all([getLocalDeviceInfo(), loadRemoteUsers()]);
         setLocalDevice(device);
         setRemoteUsers(users);
+        setInitialized(true);
+        void refreshLocalRecords();
       } catch (error) {
         console.error(error);
         toast.error("加载设备列表失败");
+        setInitialized(true);
       }
     })();
 
@@ -388,6 +620,12 @@ function ClipboardWindow() {
     });
 
     return () => {
+      abortRemoteListRequest();
+      abortRemoteContentRequest();
+      if (localRefreshTimerRef.current !== null) {
+        window.clearTimeout(localRefreshTimerRef.current);
+        localRefreshTimerRef.current = null;
+      }
       unlistenShortcutInvoke.then((unlisten) => unlisten());
       unlistenClipboardChanged.then((unlisten) => unlisten());
       unlistenConnectionStatusChanged.then((unlisten) => unlisten());
@@ -406,8 +644,11 @@ function ClipboardWindow() {
   }, []);
 
   useEffect(() => {
-    void refreshRecords();
-  }, [source, localDevice?.device_id, remoteUsers.length]);
+    if (!initialized || sourceRef.current === "local") {
+      return;
+    }
+    void refreshRemoteRecords(sourceRef.current);
+  }, [initialized, localDevice?.device_id, remoteUsers.length]);
 
   useEffect(() => {
     const currentWindow = getCurrentWindow();
@@ -518,11 +759,11 @@ function ClipboardWindow() {
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="min-w-[220px]">
-            <DropdownMenuItem onClick={() => setSource("local")}>
+            <DropdownMenuItem onClick={() => handleSourceSelect("local")}>
               本机剪切板
             </DropdownMenuItem>
             {approvedRemoteUsers.map((user) => (
-              <DropdownMenuItem key={user.user_id} onClick={() => setSource(`remote:${user.user_id}`)}>
+              <DropdownMenuItem key={user.user_id} onClick={() => handleSourceSelect(`remote:${user.user_id}`)}>
                 {user.user_name}
               </DropdownMenuItem>
             ))}

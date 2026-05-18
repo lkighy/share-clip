@@ -67,10 +67,13 @@ pub async fn paste_remote_clipboard_content(
 
 #[tauri::command]
 pub async fn copy_remote_clipboard_content(
+    app: tauri::AppHandle,
     payload: RemoteClipboardContentPayload,
 ) -> Result<(), ApiError> {
     let content = inject_content_from_remote_payload(payload)?;
-    copy_inject_content_to_clipboard(content).await
+    copy_inject_content_to_clipboard(content).await?;
+    crate::app::events::emit_clipboard_changed(&app, Vec::new(), "remote_clipboard_copied");
+    Ok(())
 }
 
 #[tauri::command]
