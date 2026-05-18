@@ -5,13 +5,17 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder};
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
 
 use super::{authorize_browser_request, json_error, HttpState};
-use crate::entity::local_files;
+use crate::entity::{clipboard_record, local_files};
 use crate::server::share::{relative_path_for, resolve_share_path};
+
+const CLIPBOARD_HTML: &str = include_str!("static/clipboard.html");
+const CLIPBOARD_CSS: &str = include_str!("static/clipboard.css");
+const CLIPBOARD_JS: &str = include_str!("static/clipboard.js");
 
 #[derive(Serialize)]
 struct ShareItem {
@@ -42,13 +46,24 @@ struct ListQuery {
     path: Option<String>,
 }
 
+#[derive(Deserialize)]
+struct ClipboardListQuery {
+    page: Option<u64>,
+    page_size: Option<u64>,
+}
+
 pub fn router() -> Router<HttpState> {
     Router::new()
         .route("/", get(index_page))
+        .route("/clipboard", get(clipboard_page_first))
+        .route("/clipboard/{page}", get(clipboard_page))
         .route("/share/{id}", get(share_page))
         .route("/api/shares", get(list_shares))
         .route("/api/shares/{id}", get(get_share))
         .route("/api/files/{id}/list", get(list_files))
+        .route("/api/clipboard", get(list_clipboard))
+        .route("/api/clipboard/list", get(list_clipboard))
+        .route("/api/clipboard/{id}/content", get(get_clipboard_content))
 }
 
 async fn index_page(State(state): State<HttpState>, headers: HeaderMap) -> Response {
@@ -172,6 +187,8 @@ async fn index_page(State(state): State<HttpState>, headers: HeaderMap) -> Respo
         <div class="links">
           <a class="button" href="/health">服务健康检查</a>
           <a class="button" href="/api/shares">JSON API</a>
+          <a class="button" href="/clipboard/1">剪切板网页</a>
+          <a class="button" href="/api/clipboard/list?page=1&page_size=20">剪切板 API</a>
         </div>
         <p class="notice">安全提醒：请只在可信网络中开放共享服务。若需要给其他设备访问，建议启用访问密码，并保持“连接授权”为需要确认。</p>
       </div>
@@ -298,6 +315,33 @@ async fn share_page(
     page_shell(&share_name, &body).into_response()
 }
 
+async fn clipboard_page_first(State(state): State<HttpState>, headers: HeaderMap) -> Response {
+    clipboard_page_response(state, 1, headers).await
+}
+
+async fn clipboard_page(
+    State(state): State<HttpState>,
+    AxumPath(page): AxumPath<u64>,
+    headers: HeaderMap,
+) -> Response {
+    clipboard_page_response(state, page.max(1), headers).await
+}
+
+async fn clipboard_page_response(state: HttpState, page: u64, headers: HeaderMap) -> Response {
+    if let Err(response) = authorize_browser_request(&state, &headers) {
+        return response;
+    }
+
+    Html(clipboard_page_html(page)).into_response()
+}
+
+fn clipboard_page_html(page: u64) -> String {
+    CLIPBOARD_HTML
+        .replace("__CLIPBOARD_CSS__", CLIPBOARD_CSS)
+        .replace("__CLIPBOARD_JS__", CLIPBOARD_JS)
+        .replace("__PAGE__", &page.to_string())
+}
+
 async fn list_shares(State(state): State<HttpState>, headers: HeaderMap) -> Response {
     if let Err(response) = authorize_browser_request(&state, &headers) {
         return response;
@@ -406,6 +450,87 @@ async fn list_files(
         items,
     })
     .into_response()
+}
+
+async fn list_clipboard(
+    State(state): State<HttpState>,
+    Query(query): Query<ClipboardListQuery>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(response) = authorize_browser_request(&state, &headers) {
+        return response;
+    }
+
+    let page = query.page.unwrap_or(1).max(1);
+    let page_size = query.page_size.unwrap_or(20).clamp(1, 100);
+    let offset = (page - 1) * page_size;
+    let rows = match clipboard_record::Entity::find()
+        .filter(clipboard_record::Column::IsShared.eq(1))
+        .order_by_desc(clipboard_record::Column::IsFavorite)
+        .order_by_desc(clipboard_record::Column::LastAccessedAt)
+        .order_by_desc(clipboard_record::Column::CreatedAt)
+        .offset(offset)
+        .limit(page_size)
+        .all(&state.db)
+        .await
+    {
+        Ok(rows) => rows,
+        Err(e) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("database error: {e}"),
+            )
+        }
+    };
+
+    let mut responses = Vec::with_capacity(rows.len());
+    for row in rows {
+        match crate::db::service::clipboard::clipboard_response_from_model_with_db(&state.db, row)
+            .await
+        {
+            Ok(response) => responses.push(response),
+            Err(e) => {
+                return json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("database error: {e}"),
+                )
+            }
+        }
+    }
+
+    Json(responses).into_response()
+}
+
+async fn get_clipboard_content(
+    State(state): State<HttpState>,
+    AxumPath(id): AxumPath<i32>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(response) = authorize_browser_request(&state, &headers) {
+        return response;
+    }
+
+    let row = match clipboard_record::Entity::find_by_id(id)
+        .one(&state.db)
+        .await
+    {
+        Ok(Some(row)) => row,
+        Ok(None) => return json_error(StatusCode::NOT_FOUND, "clipboard record not found"),
+        Err(e) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("database error: {e}"),
+            )
+        }
+    };
+    if row.is_shared != 1 {
+        return json_error(StatusCode::NOT_FOUND, "clipboard record not found");
+    }
+
+    match super::client::clipboard_content_response(&state.db, &row).await {
+        Ok(content) => Json(content).into_response(),
+        Err(e) => json_error(StatusCode::BAD_REQUEST, e),
+    }
 }
 
 fn share_to_item(row: local_files::Model) -> ShareItem {

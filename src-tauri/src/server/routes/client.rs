@@ -74,7 +74,7 @@ struct DeviceInfoResponse {
 }
 
 #[derive(Serialize)]
-struct ClipboardContentResponse {
+pub(super) struct ClipboardContentResponse {
     id: i32,
     r#type: i32,
     text: Option<String>,
@@ -86,7 +86,7 @@ struct ClipboardContentResponse {
 }
 
 #[derive(Serialize)]
-struct ClipboardFileSyncTarget {
+pub(super) struct ClipboardFileSyncTarget {
     share_id: String,
     share_name: String,
     relative_path: String,
@@ -206,6 +206,9 @@ async fn request_connection(State(state): State<HttpState>, body: String) -> Res
         .app
         .state::<crate::app::config::AppConfigStore>()
         .get();
+    if !config.sync_access_enabled {
+        return json_error(StatusCode::FORBIDDEN, "client sync access is disabled");
+    }
     if config.share_server_password_enabled {
         let expected = config
             .share_server_password_hash
@@ -854,7 +857,7 @@ fn remote_share_item(row: local_files::Model) -> RemoteShareItem {
     }
 }
 
-async fn clipboard_content_response(
+pub(super) async fn clipboard_content_response(
     db: &DatabaseConnection,
     record: &clipboard_record::Model,
 ) -> Result<ClipboardContentResponse, String> {
@@ -1131,6 +1134,17 @@ fn parse_range(range: Option<&str>, total_size: u64) -> Result<(u64, u64, bool),
 }
 
 async fn authorize_client_request(state: &HttpState, headers: &HeaderMap) -> Result<(), Response> {
+    let config = state
+        .app
+        .state::<crate::app::config::AppConfigStore>()
+        .get();
+    if !config.sync_access_enabled {
+        return Err(json_error(
+            StatusCode::FORBIDDEN,
+            "client sync access is disabled",
+        ));
+    }
+
     let user_id = headers
         .get("x-share-clip-user-id")
         .and_then(|value| value.to_str().ok())
