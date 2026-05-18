@@ -37,6 +37,15 @@ type AppConfigForm = {
   share_server_password_hash: string;
   share_server_auth_mode: string;
   browser_access_enabled: boolean;
+  web_access_auth_required: boolean;
+  web_access_password_enabled: boolean;
+  web_access_password: string;
+  web_access_temp_approval_enabled: boolean;
+  web_access_cookie_ttl_seconds: string;
+  web_access_scope_files: boolean;
+  web_access_scope_clipboard_list: boolean;
+  web_access_scope_clipboard_content: boolean;
+  web_access_scope_download: boolean;
   sync_access_enabled: boolean;
   popup_on_inbound_request: boolean;
 };
@@ -84,6 +93,15 @@ const emptyForm: AppConfigForm = {
   share_server_password_hash: "",
   share_server_auth_mode: "1",
   browser_access_enabled: true,
+  web_access_auth_required: true,
+  web_access_password_enabled: false,
+  web_access_password: "",
+  web_access_temp_approval_enabled: true,
+  web_access_cookie_ttl_seconds: "3600",
+  web_access_scope_files: true,
+  web_access_scope_clipboard_list: true,
+  web_access_scope_clipboard_content: true,
+  web_access_scope_download: true,
   sync_access_enabled: true,
   popup_on_inbound_request: false,
 };
@@ -112,6 +130,15 @@ function toForm(config: AppConfig): AppConfigForm {
     share_server_password_hash: config.share_server_password_hash ?? "",
     share_server_auth_mode: String(config.share_server_auth_mode ?? 1),
     browser_access_enabled: config.browser_access_enabled ?? true,
+    web_access_auth_required: config.web_access_auth_required ?? true,
+    web_access_password_enabled: config.web_access_password_enabled ?? false,
+    web_access_password: config.web_access_password ?? "",
+    web_access_temp_approval_enabled: config.web_access_temp_approval_enabled ?? true,
+    web_access_cookie_ttl_seconds: String(config.web_access_cookie_ttl_seconds ?? 3600),
+    web_access_scope_files: config.web_access_scope_files ?? true,
+    web_access_scope_clipboard_list: config.web_access_scope_clipboard_list ?? true,
+    web_access_scope_clipboard_content: config.web_access_scope_clipboard_content ?? true,
+    web_access_scope_download: config.web_access_scope_download ?? true,
     sync_access_enabled: config.sync_access_enabled ?? true,
     popup_on_inbound_request: config.popup_on_inbound_request ?? false,
   };
@@ -227,6 +254,7 @@ export default function AppConfigWindow() {
       const spacing = parseInteger(form.clipboard_window_spacing, "窗口间距", 0);
       const shareServerPort = parseInteger(form.share_server_port, "共享服务端口", 1);
       const shareServerAuthMode = parseInteger(form.share_server_auth_mode, "授权模式", 0);
+      const webAccessCookieTtl = parseInteger(form.web_access_cookie_ttl_seconds, "Web 授权有效期", 60);
       if (shareServerPort > 65535) {
         toast.error("共享服务端口不能大于65535");
         return;
@@ -270,6 +298,15 @@ export default function AppConfigWindow() {
         share_server_password_hash: form.share_server_password_hash.trim() || null,
         share_server_auth_mode: shareServerAuthMode,
         browser_access_enabled: form.browser_access_enabled,
+        web_access_auth_required: form.web_access_auth_required,
+        web_access_password_enabled: form.web_access_password_enabled,
+        web_access_password: form.web_access_password.trim() || null,
+        web_access_temp_approval_enabled: form.web_access_temp_approval_enabled,
+        web_access_cookie_ttl_seconds: webAccessCookieTtl,
+        web_access_scope_files: form.web_access_scope_files,
+        web_access_scope_clipboard_list: form.web_access_scope_clipboard_list,
+        web_access_scope_clipboard_content: form.web_access_scope_clipboard_content,
+        web_access_scope_download: form.web_access_scope_download,
         sync_access_enabled: form.sync_access_enabled,
         popup_on_inbound_request: form.popup_on_inbound_request,
       };
@@ -340,6 +377,44 @@ export default function AppConfigWindow() {
                 <SettingsRow label="连接申请弹窗">
                   <input className="fluent-check" type="checkbox" checked={form.popup_on_inbound_request} onChange={(e) => setForm((prev) => ({ ...prev, popup_on_inbound_request: e.target.checked }))} />
                 </SettingsRow>
+            </SettingsSection>
+
+            <SettingsSection title="Web 访问授权">
+              <SettingsRow label="访问需要授权">
+                <input className="fluent-check" type="checkbox" checked={form.web_access_auth_required} onChange={(e) => setForm((prev) => ({ ...prev, web_access_auth_required: e.target.checked }))} />
+              </SettingsRow>
+              <SettingsRow label="固定访问密码">
+                <input className="fluent-check" type="checkbox" checked={form.web_access_password_enabled} onChange={(e) => setForm((prev) => ({ ...prev, web_access_password_enabled: e.target.checked }))} />
+              </SettingsRow>
+              <SettingsRow label="Web 密码" wide>
+                <input className="fluent-input" type="password" value={form.web_access_password} onChange={(e) => setForm((prev) => ({ ...prev, web_access_password: e.target.value }))} placeholder="网页 /auth 使用的固定密码" />
+              </SettingsRow>
+              <SettingsRow label="临时确认授权">
+                <input className="fluent-check" type="checkbox" checked={form.web_access_temp_approval_enabled} onChange={(e) => setForm((prev) => ({ ...prev, web_access_temp_approval_enabled: e.target.checked }))} />
+              </SettingsRow>
+              <SettingsRow label="Cookie 有效期">
+                <input className="fluent-input" value={form.web_access_cookie_ttl_seconds} onChange={(e) => setForm((prev) => ({ ...prev, web_access_cookie_ttl_seconds: e.target.value }))} placeholder="3600" />
+              </SettingsRow>
+              <SettingsRow label="权限粒度" wide>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <label className="flex items-center gap-2 text-sm text-slate-700">
+                    <input className="fluent-check" type="checkbox" checked={form.web_access_scope_files} onChange={(e) => setForm((prev) => ({ ...prev, web_access_scope_files: e.target.checked }))} />
+                    文件共享
+                  </label>
+                  <label className="flex items-center gap-2 text-sm text-slate-700">
+                    <input className="fluent-check" type="checkbox" checked={form.web_access_scope_clipboard_list} onChange={(e) => setForm((prev) => ({ ...prev, web_access_scope_clipboard_list: e.target.checked }))} />
+                    剪切板列表
+                  </label>
+                  <label className="flex items-center gap-2 text-sm text-slate-700">
+                    <input className="fluent-check" type="checkbox" checked={form.web_access_scope_clipboard_content} onChange={(e) => setForm((prev) => ({ ...prev, web_access_scope_clipboard_content: e.target.checked }))} />
+                    剪切板内容
+                  </label>
+                  <label className="flex items-center gap-2 text-sm text-slate-700">
+                    <input className="fluent-check" type="checkbox" checked={form.web_access_scope_download} onChange={(e) => setForm((prev) => ({ ...prev, web_access_scope_download: e.target.checked }))} />
+                    下载文件
+                  </label>
+                </div>
+              </SettingsRow>
             </SettingsSection>
 
             <SettingsSection title="基础设置">

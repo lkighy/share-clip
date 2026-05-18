@@ -24,6 +24,15 @@ export type AppConfig = {
   share_server_password_hash: string | null;
   share_server_auth_mode: number;
   browser_access_enabled: boolean;
+  web_access_auth_required: boolean;
+  web_access_password_enabled: boolean;
+  web_access_password: string | null;
+  web_access_temp_approval_enabled: boolean;
+  web_access_cookie_ttl_seconds: number;
+  web_access_scope_files: boolean;
+  web_access_scope_clipboard_list: boolean;
+  web_access_scope_clipboard_content: boolean;
+  web_access_scope_download: boolean;
   sync_access_enabled: boolean;
   popup_on_inbound_request: boolean;
 };

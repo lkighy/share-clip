@@ -1,21 +1,27 @@
 use std::path::{Path, PathBuf};
 
 use axum::extract::{Path as AxumPath, Query, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
 
-use super::{authorize_browser_request, json_error, HttpState};
+use super::{
+    authorize_browser_request, cookie_value, json_error, web_session_cookie, HttpState,
+    WebAccessScope,
+};
 use crate::entity::{clipboard_record, local_files};
 use crate::server::share::{relative_path_for, resolve_share_path};
 
 const CLIPBOARD_HTML: &str = include_str!("static/clipboard.html");
 const CLIPBOARD_CSS: &str = include_str!("static/clipboard.css");
 const CLIPBOARD_JS: &str = include_str!("static/clipboard.js");
+const AUTH_HTML: &str = include_str!("static/auth.html");
+const AUTH_CSS: &str = include_str!("static/auth.css");
+const AUTH_JS: &str = include_str!("static/auth.js");
 
 #[derive(Serialize)]
 struct ShareItem {
@@ -52,8 +58,62 @@ struct ClipboardListQuery {
     page_size: Option<u64>,
 }
 
+#[derive(Deserialize)]
+struct AuthPasswordPayload {
+    password: String,
+    scopes: Option<Vec<String>>,
+}
+
+#[derive(Deserialize)]
+struct AuthRequestPayload {
+    client_label: Option<String>,
+    scopes: Option<Vec<String>>,
+}
+
+#[derive(Serialize)]
+struct AuthScopeOption {
+    name: String,
+    label: &'static str,
+    enabled: bool,
+}
+
+#[derive(Serialize)]
+struct AuthStatusResponse {
+    auth_required: bool,
+    authenticated: bool,
+    password_enabled: bool,
+    temp_approval_enabled: bool,
+    cookie_ttl_seconds: u64,
+    scopes: Vec<AuthScopeOption>,
+    session_scopes: Vec<String>,
+    expires_at: Option<i64>,
+}
+
+#[derive(Serialize)]
+struct AuthSessionResponse {
+    ok: bool,
+    scopes: Vec<String>,
+    expires_at: i64,
+}
+
+#[derive(Serialize)]
+struct AuthRequestResponse {
+    id: String,
+    auth_status: i32,
+    scopes: Vec<String>,
+    created_at: i64,
+    expires_at: i64,
+    decided_at: Option<i64>,
+    session_expires_at: Option<i64>,
+}
+
 pub fn router() -> Router<HttpState> {
     Router::new()
+        .route("/auth", get(auth_page))
+        .route("/auth/status", get(auth_status))
+        .route("/auth/status/{id}", get(auth_request_status))
+        .route("/auth/password", post(auth_password))
+        .route("/auth/request", post(auth_request))
         .route("/", get(index_page))
         .route("/clipboard", get(clipboard_page_first))
         .route("/clipboard/{page}", get(clipboard_page))
@@ -66,8 +126,272 @@ pub fn router() -> Router<HttpState> {
         .route("/api/clipboard/{id}/content", get(get_clipboard_content))
 }
 
+async fn auth_page(State(state): State<HttpState>) -> Response {
+    let config = state
+        .app
+        .state::<crate::app::config::AppConfigStore>()
+        .get();
+    let scopes = auth_scope_options(&config);
+    let scope_inputs = scopes
+        .iter()
+        .filter(|scope| scope.enabled)
+        .map(|scope| {
+            format!(
+                r#"<label class="scope"><input type="checkbox" name="scope" value="{name}" checked><span>{label}</span></label>"#,
+                name = scope.name,
+                label = scope.label,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let password_panel = if config.web_access_password_enabled {
+        r#"<form id="password-form" class="panel">
+          <h2>固定访问密码</h2>
+          <div class="row">
+            <input id="password" type="password" autocomplete="current-password" placeholder="访问密码">
+            <button type="submit">授权</button>
+          </div>
+        </form>"#
+            .to_string()
+    } else {
+        r#"<div class="panel muted"><h2>固定访问密码</h2><p>当前未启用固定 Web 访问密码。</p></div>"#
+            .to_string()
+    };
+    let temp_panel = if config.web_access_temp_approval_enabled {
+        r#"<div class="panel">
+          <h2>临时确认授权</h2>
+          <button id="request-button" type="button">发送临时授权请求</button>
+          <p id="request-state" class="state"></p>
+        </div>"#
+            .to_string()
+    } else {
+        r#"<div class="panel muted"><h2>临时确认授权</h2><p>当前未启用临时确认授权。</p></div>"#
+            .to_string()
+    };
+
+    Html(auth_page_html(
+        config.web_access_cookie_ttl_seconds.max(60),
+        &scope_inputs,
+        &password_panel,
+        &temp_panel,
+    ))
+    .into_response()
+}
+
+async fn auth_status(State(state): State<HttpState>, headers: HeaderMap) -> Response {
+    let config = state
+        .app
+        .state::<crate::app::config::AppConfigStore>()
+        .get();
+    let auth = state.app.state::<crate::server::web_auth::WebAuthState>();
+    let session = cookie_value(&headers, crate::server::web_auth::COOKIE_NAME)
+        .and_then(|token| auth.session_status(&token));
+    Json(AuthStatusResponse {
+        auth_required: config.web_access_auth_required,
+        authenticated: session.is_some() || !config.web_access_auth_required,
+        password_enabled: config.web_access_password_enabled,
+        temp_approval_enabled: config.web_access_temp_approval_enabled,
+        cookie_ttl_seconds: config.web_access_cookie_ttl_seconds.max(60),
+        scopes: auth_scope_options(&config),
+        session_scopes: session
+            .as_ref()
+            .map(|session| crate::server::web_auth::scope_names(&session.scopes))
+            .unwrap_or_default(),
+        expires_at: session.map(|session| session.expires_at),
+    })
+    .into_response()
+}
+
+async fn auth_password(
+    State(state): State<HttpState>,
+    Json(payload): Json<AuthPasswordPayload>,
+) -> Response {
+    let config = state
+        .app
+        .state::<crate::app::config::AppConfigStore>()
+        .get();
+    if !config.browser_access_enabled {
+        return json_error(StatusCode::FORBIDDEN, "browser access is disabled");
+    }
+    if !config.web_access_password_enabled {
+        return json_error(StatusCode::FORBIDDEN, "web password auth is disabled");
+    }
+    let expected = config
+        .web_access_password
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if expected.is_none() || Some(payload.password.trim()) != expected {
+        return json_error(StatusCode::UNAUTHORIZED, "password required or invalid");
+    }
+
+    let scopes = match crate::server::web_auth::scopes_from_optional_names(
+        payload.scopes.as_deref(),
+        &config,
+    ) {
+        Ok(scopes) => scopes,
+        Err(error) => return json_error(StatusCode::BAD_REQUEST, error),
+    };
+    let auth = state.app.state::<crate::server::web_auth::WebAuthState>();
+    let session = auth.issue_session(scopes, config.web_access_cookie_ttl_seconds);
+    session_json_response(&session, config.web_access_cookie_ttl_seconds)
+}
+
+async fn auth_request(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Json(payload): Json<AuthRequestPayload>,
+) -> Response {
+    let config = state
+        .app
+        .state::<crate::app::config::AppConfigStore>()
+        .get();
+    if !config.browser_access_enabled {
+        return json_error(StatusCode::FORBIDDEN, "browser access is disabled");
+    }
+    if !config.web_access_temp_approval_enabled {
+        return json_error(StatusCode::FORBIDDEN, "temporary web auth is disabled");
+    }
+    let scopes = match crate::server::web_auth::scopes_from_optional_names(
+        payload.scopes.as_deref(),
+        &config,
+    ) {
+        Ok(scopes) => scopes,
+        Err(error) => return json_error(StatusCode::BAD_REQUEST, error),
+    };
+    let ip = header_text(&headers, "x-forwarded-for")
+        .and_then(|value| {
+            value
+                .split(',')
+                .next()
+                .map(|value| value.trim().to_string())
+        })
+        .or_else(|| header_text(&headers, "x-real-ip"))
+        .unwrap_or_else(|| "unknown".to_string());
+    let user_agent = header_text(&headers, "user-agent");
+    let client_label = payload
+        .client_label
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("Web 浏览器")
+        .chars()
+        .take(120)
+        .collect::<String>();
+    let auth = state.app.state::<crate::server::web_auth::WebAuthState>();
+    let request = auth.create_request(client_label, ip, user_agent, scopes);
+    crate::app::events::emit_web_access_requested(
+        &state.app,
+        vec![request.id.clone()],
+        "web_access_pending",
+    );
+    if config.popup_on_inbound_request {
+        let _ = crate::app::ui::window::open_or_create_window(
+            &state.app,
+            crate::models::window::WindowLabel::ShareFile,
+        );
+    }
+    Json(auth_request_response(&request)).into_response()
+}
+
+async fn auth_request_status(
+    State(state): State<HttpState>,
+    AxumPath(id): AxumPath<String>,
+) -> Response {
+    let config = state
+        .app
+        .state::<crate::app::config::AppConfigStore>()
+        .get();
+    let auth = state.app.state::<crate::server::web_auth::WebAuthState>();
+    let Some(request) = auth.request_status(&id) else {
+        return json_error(StatusCode::NOT_FOUND, "web auth request not found");
+    };
+    let mut response = Json(auth_request_response(&request)).into_response();
+    if request.auth_status == crate::server::web_auth::AUTH_STATUS_APPROVED {
+        if let Some(token) = request.session_token.as_deref() {
+            if let Ok(value) = HeaderValue::from_str(&web_session_cookie(
+                token,
+                config.web_access_cookie_ttl_seconds,
+            )) {
+                response.headers_mut().insert(header::SET_COOKIE, value);
+            }
+        }
+    }
+    response
+}
+
+fn auth_page_html(
+    ttl_seconds: u64,
+    scope_inputs: &str,
+    password_panel: &str,
+    temp_panel: &str,
+) -> String {
+    AUTH_HTML
+        .replace("__AUTH_CSS__", AUTH_CSS)
+        .replace("__AUTH_JS__", AUTH_JS)
+        .replace("__TTL__", &ttl_seconds.to_string())
+        .replace("__SCOPE_INPUTS__", scope_inputs)
+        .replace("__PASSWORD_PANEL__", password_panel)
+        .replace("__TEMP_PANEL__", temp_panel)
+}
+
+fn session_json_response(
+    session: &crate::server::web_auth::WebSession,
+    ttl_seconds: u64,
+) -> Response {
+    let mut response = Json(AuthSessionResponse {
+        ok: true,
+        scopes: crate::server::web_auth::scope_names(&session.scopes),
+        expires_at: session.expires_at,
+    })
+    .into_response();
+    if let Ok(value) = HeaderValue::from_str(&web_session_cookie(&session.token, ttl_seconds)) {
+        response.headers_mut().insert(header::SET_COOKIE, value);
+    }
+    response
+}
+
+fn auth_request_response(
+    request: &crate::server::web_auth::WebAccessRequest,
+) -> AuthRequestResponse {
+    AuthRequestResponse {
+        id: request.id.clone(),
+        auth_status: request.auth_status,
+        scopes: crate::server::web_auth::scope_names(&request.scopes),
+        created_at: request.created_at,
+        expires_at: request.expires_at,
+        decided_at: request.decided_at,
+        session_expires_at: request.session_expires_at,
+    }
+}
+
+fn auth_scope_options(config: &crate::app::config::AppConfig) -> Vec<AuthScopeOption> {
+    [
+        WebAccessScope::Files,
+        WebAccessScope::ClipboardList,
+        WebAccessScope::ClipboardContent,
+        WebAccessScope::Download,
+    ]
+    .into_iter()
+    .map(|scope| AuthScopeOption {
+        name: scope.as_str().to_string(),
+        label: scope.label(),
+        enabled: crate::server::web_auth::is_scope_enabled(config, scope),
+    })
+    .collect()
+}
+
+fn header_text(headers: &HeaderMap, name: &'static str) -> Option<String> {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
 async fn index_page(State(state): State<HttpState>, headers: HeaderMap) -> Response {
-    if let Err(response) = authorize_browser_request(&state, &headers) {
+    if let Err(response) = authorize_browser_request(&state, &headers, WebAccessScope::Files) {
         return response;
     }
 
@@ -97,7 +421,7 @@ async fn index_page(State(state): State<HttpState>, headers: HeaderMap) -> Respo
     } else {
         "需要确认"
     };
-    let password_status = if config.share_server_password_enabled {
+    let password_status = if config.web_access_password_enabled {
         "已启用"
     } else {
         "未启用"
@@ -177,7 +501,7 @@ async fn index_page(State(state): State<HttpState>, headers: HeaderMap) -> Respo
           <div class="metric"><div class="label">浏览器访问</div><div class="value">{browser_status}</div></div>
           <div class="metric"><div class="label">客户端同步</div><div class="value">{sync_status}</div></div>
           <div class="metric"><div class="label">连接授权</div><div class="value">{auth_status}</div></div>
-          <div class="metric"><div class="label">访问密码</div><div class="value">{password_status}</div></div>
+          <div class="metric"><div class="label">Web 访问密码</div><div class="value">{password_status}</div></div>
         </div>
         <h2>可访问的共享</h2>
         <div class="table">
@@ -206,7 +530,7 @@ async fn share_page(
     Query(query): Query<ListQuery>,
     headers: HeaderMap,
 ) -> Response {
-    if let Err(response) = authorize_browser_request(&state, &headers) {
+    if let Err(response) = authorize_browser_request(&state, &headers, WebAccessScope::Files) {
         return response;
     }
 
@@ -328,7 +652,9 @@ async fn clipboard_page(
 }
 
 async fn clipboard_page_response(state: HttpState, page: u64, headers: HeaderMap) -> Response {
-    if let Err(response) = authorize_browser_request(&state, &headers) {
+    if let Err(response) =
+        authorize_browser_request(&state, &headers, WebAccessScope::ClipboardList)
+    {
         return response;
     }
 
@@ -343,7 +669,7 @@ fn clipboard_page_html(page: u64) -> String {
 }
 
 async fn list_shares(State(state): State<HttpState>, headers: HeaderMap) -> Response {
-    if let Err(response) = authorize_browser_request(&state, &headers) {
+    if let Err(response) = authorize_browser_request(&state, &headers, WebAccessScope::Files) {
         return response;
     }
 
@@ -372,7 +698,7 @@ async fn get_share(
     AxumPath(id): AxumPath<String>,
     headers: HeaderMap,
 ) -> Response {
-    if let Err(response) = authorize_browser_request(&state, &headers) {
+    if let Err(response) = authorize_browser_request(&state, &headers, WebAccessScope::Files) {
         return response;
     }
 
@@ -389,7 +715,7 @@ async fn list_files(
     Query(query): Query<ListQuery>,
     headers: HeaderMap,
 ) -> Response {
-    if let Err(response) = authorize_browser_request(&state, &headers) {
+    if let Err(response) = authorize_browser_request(&state, &headers, WebAccessScope::Files) {
         return response;
     }
 
@@ -457,7 +783,9 @@ async fn list_clipboard(
     Query(query): Query<ClipboardListQuery>,
     headers: HeaderMap,
 ) -> Response {
-    if let Err(response) = authorize_browser_request(&state, &headers) {
+    if let Err(response) =
+        authorize_browser_request(&state, &headers, WebAccessScope::ClipboardList)
+    {
         return response;
     }
 
@@ -506,7 +834,9 @@ async fn get_clipboard_content(
     AxumPath(id): AxumPath<i32>,
     headers: HeaderMap,
 ) -> Response {
-    if let Err(response) = authorize_browser_request(&state, &headers) {
+    if let Err(response) =
+        authorize_browser_request(&state, &headers, WebAccessScope::ClipboardContent)
+    {
         return response;
     }
 

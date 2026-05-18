@@ -8,6 +8,7 @@ pub const SHARED_FILES_CHANGED: &str = "share://shared-files-changed";
 pub const SHARED_FILE_INDEX_CHANGED: &str = "share://shared-file-index-changed";
 #[allow(dead_code)]
 pub const INBOUND_REQUESTED: &str = "share://inbound-requested";
+pub const WEB_ACCESS_REQUESTED: &str = "share://web-access-requested";
 pub const CONNECTION_STATUS_CHANGED: &str = "share://connection-status-changed";
 pub const CLIPBOARD_CHANGED: &str = "clipboard://changed";
 pub const SERVER_STATUS_CHANGED: &str = "server://status-changed";
@@ -56,6 +57,16 @@ pub fn emit_server_status_changed(app: &AppHandle, reason: &'static str) {
 
 pub fn emit_inbound_requested(app: &AppHandle, ids: Vec<String>, reason: &'static str) {
     emit_data_changed(app, INBOUND_REQUESTED, "inbound_connections", ids, reason);
+}
+
+pub fn emit_web_access_requested(app: &AppHandle, ids: Vec<String>, reason: &'static str) {
+    emit_data_changed(
+        app,
+        WEB_ACCESS_REQUESTED,
+        "web_access_requests",
+        ids,
+        reason,
+    );
 }
 
 pub fn emit_connection_status_changed(app: &AppHandle, ids: Vec<String>, reason: &'static str) {

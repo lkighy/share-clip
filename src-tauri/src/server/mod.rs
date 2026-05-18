@@ -2,6 +2,7 @@ mod routes;
 mod service;
 mod share;
 pub(crate) mod sync;
+pub mod web_auth;
 
 use std::sync::Mutex;
 

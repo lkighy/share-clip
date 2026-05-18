@@ -44,16 +44,19 @@ import {
   listLocalSharedFiles,
   listRemoteCachedFiles,
   listRemoteShareUsers,
+  listWebAccessRequests,
   refreshLocalShareIndexes,
   removeRemoteShareUser,
   removeRemoteSharedCache,
   revealLocalSharedFile,
   revealRemoteSharedCache,
   setInboundConnectionAuthStatus,
+  setWebAccessRequestAuthStatus,
   type InboundConnectionRequest,
   type LocalSharedFileItem,
   type RemoteCachedFileItem,
   type RemoteShareUser,
+  type WebAccessRequest,
   updateRemoteShareUserAuthStatus,
   upsertRemoteShareUser,
   unshareLocalSharedFile,
@@ -199,6 +202,13 @@ type TransferProgress = {
 
 type ConnectionDialogMode = "add" | "edit" | "reauth";
 
+const WEB_SCOPE_LABELS: Record<string, string> = {
+  files: "文件共享",
+  clipboard_list: "剪切板列表",
+  clipboard_content: "剪切板内容",
+  download: "文件下载",
+};
+
 class RemoteHttpError extends Error {
   status: number;
   action: string;
@@ -275,6 +285,10 @@ function authStatusClass(status?: number) {
     default:
       return "bg-slate-100 text-slate-600 ring-slate-200";
   }
+}
+
+function webScopeLabel(scope: string) {
+  return WEB_SCOPE_LABELS[scope] ?? scope;
 }
 
 function remoteAuthHeaders(auth: RemoteAuthHeaders) {
@@ -561,6 +575,7 @@ export default function ShareFilesWindow() {
   const [localDevice, setLocalDevice] = useState<LocalDeviceInfo | null>(null);
   const [remoteUsers, setRemoteUsers] = useState<RemoteShareUser[]>([]);
   const [inboundRequests, setInboundRequests] = useState<InboundConnectionRequest[]>([]);
+  const [webAccessRequests, setWebAccessRequests] = useState<WebAccessRequest[]>([]);
   const [remoteItems, setRemoteItems] = useState<RemoteFileNode[]>([]);
   const [remoteShares, setRemoteShares] = useState<RemoteShareItem[]>([]);
   const [activeRemoteShareId, setActiveRemoteShareId] = useState<string | null>(null);
@@ -1150,6 +1165,15 @@ export default function ShareFilesWindow() {
     }
   };
 
+  const loadWebAccessRequests = async () => {
+    try {
+      setWebAccessRequests(await listWebAccessRequests());
+    } catch (error) {
+      console.error(error);
+      toast.error("加载 Web 授权请求失败");
+    }
+  };
+
   const loadRemoteRoot = async () => {
     if (!activeRemote || remoteLoading) return;
     if (activeRemote.auth_status !== AUTH_STATUS.approved || !localDevice) {
@@ -1604,6 +1628,22 @@ export default function ShareFilesWindow() {
     }
   };
 
+  const handleWebAccessDecision = async (id: string, authStatus: AuthStatus) => {
+    try {
+      const request = webAccessRequests.find((item) => item.id === id);
+      await setWebAccessRequestAuthStatus({
+        id,
+        auth_status: authStatus,
+        scopes: request?.scopes ?? null,
+      });
+      setWebAccessRequests((prev) => prev.filter((item) => item.id !== id));
+      toast.success(authStatus === AUTH_STATUS.approved ? "已同意 Web 访问" : "已拒绝 Web 访问");
+    } catch (error) {
+      console.error(error);
+      toast.error("处理 Web 授权请求失败");
+    }
+  };
+
   const handleRemoveRemoteUser = async (userId: string) => {
     try {
       await removeRemoteShareUser(userId);
@@ -1658,8 +1698,10 @@ export default function ShareFilesWindow() {
     void refreshMine();
     void loadRemoteUsers();
     void loadInboundRequests();
+    void loadWebAccessRequests();
     const timer = window.setInterval(() => {
       void loadInboundRequests();
+      void loadWebAccessRequests();
     }, 3_000);
     return () => {
       window.clearInterval(timer);
@@ -1670,15 +1712,22 @@ export default function ShareFilesWindow() {
     const unlistenOpenDeviceTab = listen("share://open-device-tab", () => {
       setTab("devices");
       void loadInboundRequests();
+      void loadWebAccessRequests();
       void loadRemoteUsers();
     });
     const unlistenInbound = listen("share://inbound-requested", () => {
       void loadInboundRequests();
       toast.info("收到新的连接申请");
     });
+    const unlistenWebAccess = listen("share://web-access-requested", () => {
+      setTab("devices");
+      void loadWebAccessRequests();
+      toast.info("收到新的 Web 授权请求");
+    });
     return () => {
       unlistenOpenDeviceTab.then((off) => off());
       unlistenInbound.then((off) => off());
+      unlistenWebAccess.then((off) => off());
     };
   }, []);
 
@@ -2172,6 +2221,46 @@ export default function ShareFilesWindow() {
             </div>
           )}
         </section>
+
+        <section className="rounded-lg border border-slate-200 bg-white/75 p-3 lg:col-span-2">
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="text-sm font-semibold text-slate-900">Web 临时授权</h2>
+            {webAccessRequests.length > 0 ? (
+              <span className="rounded-full bg-sky-100 px-2 py-0.5 text-xs text-sky-700">{webAccessRequests.length} 个待处理</span>
+            ) : null}
+          </div>
+          {webAccessRequests.length === 0 ? (
+            <p className="rounded-md bg-slate-50 px-3 py-2 text-sm text-slate-500">暂无待处理 Web 授权请求</p>
+          ) : (
+            <div className="space-y-2">
+              {webAccessRequests.map((request) => (
+                <div key={request.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-sky-200 bg-sky-50/70 px-3 py-2">
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-medium text-slate-800">{request.client_label || "Web 浏览器"}</div>
+                    <div className="mt-1 truncate text-xs text-slate-500">{request.ip}</div>
+                    <div className="mt-1 flex flex-wrap gap-1">
+                      {request.scopes.map((scope) => (
+                        <span key={scope} className="rounded bg-white/85 px-1.5 py-0.5 text-[11px] text-sky-700 ring-1 ring-sky-100">
+                          {webScopeLabel(scope)}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button size="sm" onClick={() => void handleWebAccessDecision(request.id, AUTH_STATUS.approved)}>
+                      <Check size={13} className="mr-1" />
+                      同意
+                    </Button>
+                    <Button size="sm" variant="outline" className="text-red-600" onClick={() => void handleWebAccessDecision(request.id, AUTH_STATUS.rejected)}>
+                      <XCircle size={13} className="mr-1" />
+                      拒绝
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
       </div>
     </div>
   );
@@ -2223,6 +2312,7 @@ export default function ShareFilesWindow() {
               else if (tab === "devices") {
                 void loadRemoteUsers();
                 void loadInboundRequests();
+                void loadWebAccessRequests();
               } else {
                 void loadRemoteRoot();
               }
@@ -2242,7 +2332,7 @@ export default function ShareFilesWindow() {
             </button>
             <button className={`relative rounded-md px-3 py-1.5 text-sm transition ${tab === "devices" ? "bg-white font-medium text-slate-950 shadow-sm" : "text-slate-600 hover:bg-white/70"}`} onClick={() => setTab("devices")}>
               设备连接
-              {inboundRequests.length > 0 ? <span className="absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full bg-red-500 ring-2 ring-white" /> : null}
+              {inboundRequests.length + webAccessRequests.length > 0 ? <span className="absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full bg-red-500 ring-2 ring-white" /> : null}
             </button>
             {remoteUsers.map((user) => (
               <button key={user.user_id} className={`flex items-center gap-2 rounded-md px-3 py-1.5 text-sm transition ${tab === `remote:${user.user_id}` ? "bg-white font-medium text-slate-950 shadow-sm" : "text-slate-600 hover:bg-white/70"}`} onClick={() => setTab(`remote:${user.user_id}`)}>
@@ -2282,11 +2372,11 @@ export default function ShareFilesWindow() {
         </div>
 
         <section className="fluent-panel flex-1 overflow-hidden">
-        {inboundRequests.length > 0 ? (
+        {inboundRequests.length + webAccessRequests.length > 0 ? (
           <div className="border-b border-slate-200/80 bg-amber-50/80 px-3 py-2">
             <div className="flex flex-wrap items-center gap-2">
               <ShieldQuestion size={15} className="text-amber-700" />
-              <span className="text-xs font-medium text-amber-800">待处理连接请求</span>
+              <span className="text-xs font-medium text-amber-800">待处理授权请求</span>
               {inboundRequests.map((request) => (
                 <div key={request.user_id} className="flex items-center gap-2 rounded-md border border-amber-200 bg-white/80 px-2 py-1 text-xs text-slate-700">
                   <span className="max-w-[180px] truncate">{request.user_name || request.user_id}</span>
@@ -2296,6 +2386,20 @@ export default function ShareFilesWindow() {
                     同意
                   </Button>
                   <Button size="sm" variant="outline" className="h-6 px-2 text-red-600" onClick={() => void handleInboundDecision(request.user_id, AUTH_STATUS.rejected)}>
+                    <XCircle size={12} className="mr-1" />
+                    拒绝
+                  </Button>
+                </div>
+              ))}
+              {webAccessRequests.map((request) => (
+                <div key={request.id} className="flex items-center gap-2 rounded-md border border-sky-200 bg-white/80 px-2 py-1 text-xs text-slate-700">
+                  <span className="max-w-[180px] truncate">Web: {request.client_label || request.ip}</span>
+                  <span className="text-slate-400">{request.scopes.map(webScopeLabel).join(" / ")}</span>
+                  <Button size="sm" className="h-6 px-2" onClick={() => void handleWebAccessDecision(request.id, AUTH_STATUS.approved)}>
+                    <Check size={12} className="mr-1" />
+                    同意
+                  </Button>
+                  <Button size="sm" variant="outline" className="h-6 px-2 text-red-600" onClick={() => void handleWebAccessDecision(request.id, AUTH_STATUS.rejected)}>
                     <XCircle size={12} className="mr-1" />
                     拒绝
                   </Button>

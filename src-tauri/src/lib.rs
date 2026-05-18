@@ -68,6 +68,7 @@ pub fn run() {
             });
 
             app.manage(config_store);
+            app.manage(server::web_auth::WebAuthState::default());
             app.manage(server::ServerState::new(db.clone()));
             app.manage(DbState { conn: db });
             init_app(app);
@@ -128,6 +129,8 @@ pub fn run() {
             share_files_commands::remove_remote_share_user,
             share_files_commands::list_inbound_connection_requests,
             share_files_commands::set_inbound_connection_auth_status,
+            share_files_commands::list_web_access_requests,
+            share_files_commands::set_web_access_request_auth_status,
             share_files_commands::reveal_shared_clipboard_item,
             share_files_commands::reveal_local_shared_file,
             share_files_commands::get_local_shared_file_thumbnail,

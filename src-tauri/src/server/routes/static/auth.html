@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Share Clip Web 授权</title>
+<style>__AUTH_CSS__</style>
+<body>
+  <main>
+    <section>
+      <header>
+        <h1>Web 访问授权</h1>
+        <p>授权结果会写入 HttpOnly Cookie，有效期 __TTL__ 秒。</p>
+      </header>
+      <div class="content">
+        <div class="panel">
+          <h2>授权范围</h2>
+          <div class="scopes">__SCOPE_INPUTS__</div>
+        </div>
+        __PASSWORD_PANEL__
+        __TEMP_PANEL__
+        <p id="message" class="state"></p>
+      </div>
+    </section>
+  </main>
+<script>__AUTH_JS__</script>
+</body>
+</html>

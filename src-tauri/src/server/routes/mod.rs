@@ -7,10 +7,11 @@ use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
-use base64::Engine;
 use sea_orm::DatabaseConnection;
 use serde::Serialize;
 use tauri::Manager;
+
+pub use crate::server::web_auth::WebAccessScope;
 
 #[derive(Clone)]
 pub struct HttpState {
@@ -32,8 +33,11 @@ pub fn router(state: HttpState) -> Router {
         .with_state(state)
 }
 
-async fn health(State(_state): State<HttpState>) -> impl IntoResponse {
-    Json(serde_json::json!({ "ok": true }))
+async fn health(State(state): State<HttpState>, headers: HeaderMap) -> Response {
+    if let Err(response) = authorize_browser_request(&state, &headers, WebAccessScope::Files) {
+        return response;
+    }
+    Json(serde_json::json!({ "ok": true })).into_response()
 }
 
 async fn cors(req: Request, next: Next) -> Response {
@@ -81,7 +85,11 @@ fn json_error(status: StatusCode, message: impl Into<String>) -> Response {
         .into_response()
 }
 
-fn authorize_browser_request(state: &HttpState, headers: &HeaderMap) -> Result<(), Response> {
+fn authorize_browser_request(
+    state: &HttpState,
+    headers: &HeaderMap,
+    scope: WebAccessScope,
+) -> Result<(), Response> {
     let config = state
         .app
         .state::<crate::app::config::AppConfigStore>()
@@ -94,49 +102,35 @@ fn authorize_browser_request(state: &HttpState, headers: &HeaderMap) -> Result<(
         ));
     }
 
-    if !config.share_server_password_enabled {
+    if !crate::server::web_auth::is_scope_enabled(&config, scope) {
+        return Err(html_error(
+            StatusCode::FORBIDDEN,
+            "没有访问权限",
+            "当前网页访问权限未启用，请在 Share Clip 设置中调整 Web 权限粒度。",
+        ));
+    }
+
+    if !config.web_access_auth_required {
         return Ok(());
     }
 
-    let expected = config
-        .share_server_password_hash
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let Some(expected) = expected else {
-        return Err(browser_auth_required());
-    };
-
-    if browser_basic_password(headers).as_deref() == Some(expected) {
+    let auth = state.app.state::<crate::server::web_auth::WebAuthState>();
+    if cookie_value(headers, crate::server::web_auth::COOKIE_NAME)
+        .and_then(|token| auth.validate_session(&token, scope))
+        .is_some()
+    {
         return Ok(());
     }
 
     Err(browser_auth_required())
 }
 
-fn browser_basic_password(headers: &HeaderMap) -> Option<String> {
-    let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?.trim();
-    let encoded = value.strip_prefix("Basic ")?;
-    let decoded = base64::engine::general_purpose::STANDARD
-        .decode(encoded.as_bytes())
-        .ok()?;
-    let decoded = String::from_utf8(decoded).ok()?;
-    decoded
-        .split_once(':')
-        .map(|(_, password)| password.to_string())
-}
-
 fn browser_auth_required() -> Response {
-    let mut response = html_error(
+    html_error(
         StatusCode::UNAUTHORIZED,
-        "需要访问密码",
-        "请输入 Share Clip 共享服务器访问密码。",
-    );
-    response.headers_mut().insert(
-        header::WWW_AUTHENTICATE,
-        HeaderValue::from_static(r#"Basic realm="Share Clip", charset="UTF-8""#),
-    );
-    response
+        "需要授权",
+        r#"请先打开 <a href="/auth">Web 授权页面</a>，使用访问密码或临时确认后再继续访问。"#,
+    )
 }
 
 fn html_error(status: StatusCode, title: &str, message: &str) -> Response {
@@ -154,14 +148,32 @@ fn html_error(status: StatusCode, title: &str, message: &str) -> Response {
   main {{ width: min(520px, calc(100vw - 32px)); border: 1px solid #dbe3ee; border-radius: 10px; background: white; padding: 26px; box-shadow: 0 12px 32px rgba(15,23,42,.08); }}
   h1 {{ margin: 0 0 10px; font-size: 22px; }}
   p {{ margin: 0; color: #475569; line-height: 1.7; }}
+  a {{ color: #0369a1; text-decoration: none; }}
 </style>
 <main><h1>{title}</h1><p>{message}</p></main>
 </html>"#,
             title = escape_html(title),
-            message = escape_html(message),
+            message = message,
         ),
     )
         .into_response()
+}
+
+pub fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
+    let cookie = headers.get(header::COOKIE)?.to_str().ok()?;
+    cookie.split(';').find_map(|part| {
+        let (key, value) = part.trim().split_once('=')?;
+        (key == name).then(|| value.to_string())
+    })
+}
+
+pub fn web_session_cookie(token: &str, max_age_seconds: u64) -> String {
+    format!(
+        "{}={}; Path=/; Max-Age={}; HttpOnly; SameSite=Lax",
+        crate::server::web_auth::COOKIE_NAME,
+        token,
+        max_age_seconds.max(60)
+    )
 }
 
 fn escape_html(value: &str) -> String {

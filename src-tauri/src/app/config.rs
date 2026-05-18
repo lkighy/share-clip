@@ -57,6 +57,21 @@ pub struct AppConfig {
     pub share_server_auth_mode: i32,
     // 是否允许浏览器访问
     pub browser_access_enabled: bool,
+    // Web 访问是否默认需要授权
+    pub web_access_auth_required: bool,
+    // 是否允许使用固定 Web 访问密码授权
+    pub web_access_password_enabled: bool,
+    // 固定 Web 访问密码
+    pub web_access_password: Option<String>,
+    // 是否允许通过桌面端临时确认授权
+    pub web_access_temp_approval_enabled: bool,
+    // Web 授权 Cookie 有效期，默认 1 小时
+    pub web_access_cookie_ttl_seconds: u64,
+    // Web 权限粒度开关
+    pub web_access_scope_files: bool,
+    pub web_access_scope_clipboard_list: bool,
+    pub web_access_scope_clipboard_content: bool,
+    pub web_access_scope_download: bool,
     // 是否允许客户端同步访问
     pub sync_access_enabled: bool,
     // 收到连接申请时是否主动弹出确认浮窗
@@ -92,6 +107,15 @@ pub struct AppConfigUpdate {
     pub share_server_password_hash: Option<Option<String>>,
     pub share_server_auth_mode: Option<i32>,
     pub browser_access_enabled: Option<bool>,
+    pub web_access_auth_required: Option<bool>,
+    pub web_access_password_enabled: Option<bool>,
+    pub web_access_password: Option<Option<String>>,
+    pub web_access_temp_approval_enabled: Option<bool>,
+    pub web_access_cookie_ttl_seconds: Option<u64>,
+    pub web_access_scope_files: Option<bool>,
+    pub web_access_scope_clipboard_list: Option<bool>,
+    pub web_access_scope_clipboard_content: Option<bool>,
+    pub web_access_scope_download: Option<bool>,
     pub sync_access_enabled: Option<bool>,
     pub popup_on_inbound_request: Option<bool>,
 }
@@ -182,6 +206,35 @@ impl AppConfigUpdate {
         if let Some(value) = self.browser_access_enabled {
             config.browser_access_enabled = value;
         }
+        if let Some(value) = self.web_access_auth_required {
+            config.web_access_auth_required = value;
+        }
+        if let Some(value) = self.web_access_password_enabled {
+            config.web_access_password_enabled = value;
+        }
+        if let Some(value) = self.web_access_password {
+            config.web_access_password = value
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty());
+        }
+        if let Some(value) = self.web_access_temp_approval_enabled {
+            config.web_access_temp_approval_enabled = value;
+        }
+        if let Some(value) = self.web_access_cookie_ttl_seconds {
+            config.web_access_cookie_ttl_seconds = value.max(60);
+        }
+        if let Some(value) = self.web_access_scope_files {
+            config.web_access_scope_files = value;
+        }
+        if let Some(value) = self.web_access_scope_clipboard_list {
+            config.web_access_scope_clipboard_list = value;
+        }
+        if let Some(value) = self.web_access_scope_clipboard_content {
+            config.web_access_scope_clipboard_content = value;
+        }
+        if let Some(value) = self.web_access_scope_download {
+            config.web_access_scope_download = value;
+        }
         if let Some(value) = self.sync_access_enabled {
             config.sync_access_enabled = value;
         }
@@ -219,6 +272,15 @@ impl Default for AppConfig {
             share_server_password_hash: None,
             share_server_auth_mode: 1,
             browser_access_enabled: true,
+            web_access_auth_required: true,
+            web_access_password_enabled: false,
+            web_access_password: None,
+            web_access_temp_approval_enabled: true,
+            web_access_cookie_ttl_seconds: 3600,
+            web_access_scope_files: true,
+            web_access_scope_clipboard_list: true,
+            web_access_scope_clipboard_content: true,
+            web_access_scope_download: true,
             sync_access_enabled: true,
             popup_on_inbound_request: false,
         }

@@ -19,6 +19,17 @@ export type InboundConnectionRequest = {
   last_seen_at?: number | null;
 };
 
+export type WebAccessRequest = {
+  id: string;
+  client_label: string;
+  ip: string;
+  user_agent?: string | null;
+  scopes: string[];
+  auth_status: number;
+  created_at: number;
+  expires_at: number;
+};
+
 export type LocalSharedFileItem = {
   id: string;
   path: string;
@@ -65,6 +76,18 @@ export function setInboundConnectionAuthStatus(payload: {
   auth_status: number;
 }) {
   return call<InboundConnectionRequest>("set_inbound_connection_auth_status", { payload });
+}
+
+export function listWebAccessRequests() {
+  return call<WebAccessRequest[]>("list_web_access_requests");
+}
+
+export function setWebAccessRequestAuthStatus(payload: {
+  id: string;
+  auth_status: number;
+  scopes?: string[] | null;
+}) {
+  return call<WebAccessRequest>("set_web_access_request_auth_status", { payload });
 }
 
 export function revealSharedClipboardItem(id: number) {

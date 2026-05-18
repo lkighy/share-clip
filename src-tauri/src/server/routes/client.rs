@@ -717,7 +717,9 @@ async fn download_share_file(
     Query(query): Query<RelativePathQuery>,
     headers: HeaderMap,
 ) -> Response {
-    if let Err(response) = super::authorize_browser_request(&state, &headers) {
+    if let Err(response) =
+        super::authorize_browser_request(&state, &headers, super::WebAccessScope::Download)
+    {
         return response;
     }
 

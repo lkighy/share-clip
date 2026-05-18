@@ -43,6 +43,18 @@ pub struct InboundConnectionRequest {
 }
 
 #[derive(Debug, Serialize)]
+pub struct WebAccessRequest {
+    pub id: String,
+    pub client_label: String,
+    pub ip: String,
+    pub user_agent: Option<String>,
+    pub scopes: Vec<String>,
+    pub auth_status: i32,
+    pub created_at: i64,
+    pub expires_at: i64,
+}
+
+#[derive(Debug, Serialize)]
 pub struct LocalSharedFileItem {
     pub id: String,
     pub path: String,
@@ -79,6 +91,13 @@ pub struct UpdateRemoteAuthStatusPayload {
 pub struct InboundAuthDecisionPayload {
     pub user_id: String,
     pub auth_status: i32,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct WebAccessDecisionPayload {
+    pub id: String,
+    pub auth_status: i32,
+    pub scopes: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -383,6 +402,63 @@ pub async fn set_inbound_connection_auth_status(
         auth_status: updated.auth_status,
         last_seen_at: updated.last_seen_at,
     })
+}
+
+#[tauri::command]
+pub async fn list_web_access_requests(
+    app: tauri::AppHandle,
+) -> Result<Vec<WebAccessRequest>, ApiError> {
+    let auth = app.state::<crate::server::web_auth::WebAuthState>();
+    Ok(auth
+        .pending_requests()
+        .into_iter()
+        .map(web_access_request_response)
+        .collect())
+}
+
+#[tauri::command]
+pub async fn set_web_access_request_auth_status(
+    app: tauri::AppHandle,
+    payload: WebAccessDecisionPayload,
+) -> Result<WebAccessRequest, ApiError> {
+    let config = app.state::<crate::app::config::AppConfigStore>().get();
+    let scopes = match payload.scopes.as_deref() {
+        Some(scopes) => Some(
+            crate::server::web_auth::scopes_from_optional_names(Some(scopes), &config)
+                .map_err(AppError::InvalidInput)?,
+        ),
+        None => None,
+    };
+    let auth = app.state::<crate::server::web_auth::WebAuthState>();
+    let request = auth
+        .decide_request(
+            payload.id.trim(),
+            payload.auth_status,
+            scopes,
+            config.web_access_cookie_ttl_seconds,
+        )
+        .map_err(AppError::InvalidInput)?;
+    crate::app::events::emit_web_access_requested(
+        &app,
+        vec![request.id.clone()],
+        "web_access_status_changed",
+    );
+    Ok(web_access_request_response(request))
+}
+
+fn web_access_request_response(
+    request: crate::server::web_auth::WebAccessRequest,
+) -> WebAccessRequest {
+    WebAccessRequest {
+        id: request.id,
+        client_label: request.client_label,
+        ip: request.ip,
+        user_agent: request.user_agent,
+        scopes: crate::server::web_auth::scope_names(&request.scopes),
+        auth_status: request.auth_status,
+        created_at: request.created_at,
+        expires_at: request.expires_at,
+    }
 }
 
 #[tauri::command]

@@ -1,0 +1,145 @@
+:root {
+  color-scheme: light;
+  font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  background: #f6f8fb;
+  color: #0f172a;
+}
+
+main {
+  width: min(560px, calc(100vw - 28px));
+  padding: 24px 0;
+}
+
+section {
+  border: 1px solid #dbe3ee;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, .92);
+  box-shadow: 0 12px 32px rgba(15, 23, 42, .08);
+  overflow: hidden;
+}
+
+header {
+  padding: 22px 24px 16px;
+  border-bottom: 1px solid #e5ebf3;
+}
+
+h1 {
+  margin: 0 0 8px;
+  font-size: 24px;
+  line-height: 1.25;
+}
+
+h2 {
+  margin: 0 0 12px;
+  font-size: 15px;
+}
+
+p {
+  margin: 0;
+  color: #475569;
+  line-height: 1.7;
+}
+
+.content {
+  display: grid;
+  gap: 12px;
+  padding: 18px 24px 24px;
+}
+
+.panel {
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fff;
+  padding: 14px;
+}
+
+.muted {
+  background: #f8fafc;
+  color: #64748b;
+}
+
+.row {
+  display: flex;
+  gap: 8px;
+}
+
+input[type=password] {
+  min-width: 0;
+  flex: 1;
+  height: 38px;
+  border: 1px solid #cbd5e1;
+  border-radius: 7px;
+  padding: 0 10px;
+  font-size: 14px;
+}
+
+button {
+  height: 38px;
+  border: 1px solid #0284c7;
+  border-radius: 7px;
+  background: #0284c7;
+  color: #fff;
+  padding: 0 13px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: default;
+  opacity: .6;
+}
+
+.scopes {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 8px;
+}
+
+.scope {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid #e2e8f0;
+  border-radius: 7px;
+  padding: 8px;
+  font-size: 13px;
+}
+
+.scope input {
+  margin: 0;
+}
+
+.state {
+  margin-top: 10px;
+  min-height: 20px;
+  font-size: 13px;
+}
+
+.error {
+  color: #b91c1c;
+}
+
+.ok {
+  color: #047857;
+}
+
+@media (max-width: 520px) {
+  .row {
+    flex-direction: column;
+  }
+
+  button {
+    width: 100%;
+  }
+}
