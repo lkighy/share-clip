@@ -1,7 +1,13 @@
 import { useSyncExternalStore } from "react";
+import { listen } from "@tauri-apps/api/event";
 
 import { getAppConfig, updateAppConfig as updateAppConfigApi } from "@/api/appConfig";
 import type { AppConfig, AppConfigUpdate } from "@/api/types/appConfig";
+
+const THEME_QUERY = "(prefers-color-scheme: dark)";
+const THEME_STORAGE_KEY = "share-clip-theme-mode";
+const APP_CONFIG_CHANGED_EVENT = "app://config-changed";
+type ThemeMode = AppConfig["theme_mode"];
 
 type AppConfigState = {
   data: AppConfig | null;
@@ -13,6 +19,7 @@ type AppConfigState = {
 type Listener = () => void;
 
 const listeners = new Set<Listener>();
+let configChangeListenerInstalled = false;
 
 let state: AppConfigState = {
   data: null,
@@ -20,6 +27,23 @@ let state: AppConfigState = {
   saving: false,
   error: null,
 };
+
+function normalizeThemeMode(value?: string | null): ThemeMode {
+  return value === "light" || value === "dark" || value === "system" ? value : "system";
+}
+
+function applyThemeMode(mode: ThemeMode) {
+  const resolvedMode = mode === "system" && window.matchMedia(THEME_QUERY).matches ? "dark" : mode;
+  document.documentElement.classList.toggle("dark", resolvedMode === "dark");
+  document.documentElement.dataset.theme = mode;
+  document.documentElement.style.colorScheme = resolvedMode === "dark" ? "dark" : "light";
+}
+
+function applyConfigTheme(config: AppConfig | null) {
+  const mode = normalizeThemeMode(config?.theme_mode ?? localStorage.getItem(THEME_STORAGE_KEY));
+  localStorage.setItem(THEME_STORAGE_KEY, mode);
+  applyThemeMode(mode);
+}
 
 function setState(patch: Partial<AppConfigState>) {
   state = { ...state, ...patch };
@@ -50,6 +74,7 @@ export async function loadAppConfig(force = false) {
   setState({ loading: true, error: null });
   try {
     const data = await getAppConfig();
+    applyConfigTheme(data);
     setState({ data, loading: false });
     return data;
   } catch (error) {
@@ -66,6 +91,7 @@ export async function saveAppConfig(update: AppConfigUpdate) {
   setState({ saving: true, error: null });
   try {
     const data = await updateAppConfigApi(update);
+    applyConfigTheme(data);
     setState({ data, saving: false });
     return data;
   } catch (error) {
@@ -73,4 +99,20 @@ export async function saveAppConfig(update: AppConfigUpdate) {
     setState({ saving: false, error: message });
     throw error;
   }
+}
+
+export function initThemeMode() {
+  applyConfigTheme(state.data);
+  const media = window.matchMedia(THEME_QUERY);
+  media.addEventListener("change", () => {
+    applyConfigTheme(state.data);
+  });
+
+  if (configChangeListenerInstalled) {
+    return;
+  }
+  configChangeListenerInstalled = true;
+  void listen(APP_CONFIG_CHANGED_EVENT, () => {
+    void loadAppConfig(true);
+  });
 }

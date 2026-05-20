@@ -8,7 +8,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { Toaster } from "@/components/ui/sonner.tsx";
 import { Button } from "@/components/ui/button.tsx";
 import type { AppConfig, AppConfigUpdate } from "@/api/types/appConfig";
-import { getShareServerIpOptions, openLogDir } from "@/api/appConfig.ts";
+import { cleanupClipboardNow, getShareServerIpOptions, openLogDir } from "@/api/appConfig.ts";
 import { loadAppConfig, saveAppConfig, useAppConfigStore } from "@/store/appConfigStore";
 import HotkeyInput from "@/components/ui/HotkeyInput.tsx";
 import { SettingsRow, SettingsSection } from "@/components/settings/SettingsLayout";
@@ -20,6 +20,7 @@ type AppConfigForm = {
   clipboard_window_width: string;
   clipboard_window_height: string;
   clipboard_window_spacing: string;
+  theme_mode: "system" | "light" | "dark";
   clipboard_text_max_mb: string;
   clipboard_rich_format_max_mb: string;
   clipboard_total_max_mb: string;
@@ -59,6 +60,7 @@ const emptyForm: AppConfigForm = {
   clipboard_window_width: "",
   clipboard_window_height: "",
   clipboard_window_spacing: "",
+  theme_mode: "system",
   clipboard_text_max_mb: "4",
   clipboard_rich_format_max_mb: "8",
   clipboard_total_max_mb: "16",
@@ -99,6 +101,7 @@ function toForm(config: AppConfig): AppConfigForm {
     clipboard_window_width: String(config.clipboard_window_width ?? ""),
     clipboard_window_height: String(config.clipboard_window_height ?? ""),
     clipboard_window_spacing: String(config.clipboard_window_spacing ?? ""),
+    theme_mode: config.theme_mode ?? "system",
     clipboard_text_max_mb: bytesToMbString(config.clipboard_text_max_bytes ?? 4 * BYTES_PER_MB),
     clipboard_rich_format_max_mb: bytesToMbString(config.clipboard_rich_format_max_bytes ?? 8 * BYTES_PER_MB),
     clipboard_total_max_mb: bytesToMbString(config.clipboard_total_max_bytes ?? 16 * BYTES_PER_MB),
@@ -158,6 +161,7 @@ export default function AppConfigWindow() {
   const { data, loading, saving } = useAppConfigStore();
   const [form, setForm] = useState<AppConfigForm>(emptyForm);
   const [ipOptions, setIpOptions] = useState<string[]>(["127.0.0.1", "0.0.0.0"]);
+  const [cleaning, setCleaning] = useState(false);
 
   useEffect(() => {
     void handleReload(false);
@@ -236,6 +240,19 @@ export default function AppConfigWindow() {
     }
   };
 
+  const handleCleanupNow = async () => {
+    setCleaning(true);
+    try {
+      await cleanupClipboardNow();
+      toast.success("清理完成");
+    } catch (error) {
+      console.error(error);
+      toast.error("清理失败");
+    } finally {
+      setCleaning(false);
+    }
+  };
+
   const handleSave = async () => {
     try {
       const shortcut = form.shortcut.trim();
@@ -283,6 +300,7 @@ export default function AppConfigWindow() {
         clipboard_window_width: width,
         clipboard_window_height: height,
         clipboard_window_spacing: spacing,
+        theme_mode: form.theme_mode,
         clipboard_text_max_bytes: mbToBytes(clipboardTextMaxMb),
         clipboard_rich_format_max_bytes: mbToBytes(clipboardRichFormatMaxMb),
         clipboard_total_max_bytes: mbToBytes(clipboardTotalMaxMb),
@@ -423,6 +441,13 @@ export default function AppConfigWindow() {
             </SettingsSection>
 
             <SettingsSection title="基础设置">
+              <SettingsRow label="外观模式">
+                <select className="fluent-input" value={form.theme_mode} onChange={(e) => setForm((prev) => ({ ...prev, theme_mode: e.target.value as AppConfigForm["theme_mode"] }))}>
+                  <option value="system">跟随系统</option>
+                  <option value="light">浅色模式</option>
+                  <option value="dark">深色模式</option>
+                </select>
+              </SettingsRow>
               <SettingsRow label="快捷键">
                 <HotkeyInput className="fluent-input" value={form.shortcut} onChange={(newShortcut) => setForm((prev) => ({ ...prev, shortcut: newShortcut }))} placeholder="f4" />
               </SettingsRow>
@@ -479,6 +504,11 @@ export default function AppConfigWindow() {
               </SettingsRow>
               <SettingsRow label="最大条目数">
                 <input className="fluent-input" value={form.max_items} onChange={(e) => setForm((prev) => ({ ...prev, max_items: e.target.value }))} placeholder="留空表示无限制" />
+              </SettingsRow>
+              <SettingsRow label="立即清理" wide>
+                <Button type="button" variant="outline" size="sm" className="rounded-md border-slate-200 bg-white/70" onClick={() => void handleCleanupNow()} disabled={cleaning}>
+                  {cleaning ? "清理中..." : "立即清理"}
+                </Button>
               </SettingsRow>
             </SettingsSection>
 

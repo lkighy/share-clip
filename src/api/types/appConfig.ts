@@ -5,6 +5,7 @@ export type AppConfig = {
   clipboard_window_width: number;
   clipboard_window_height: number;
   clipboard_window_spacing: number;
+  theme_mode: "system" | "light" | "dark";
   share_files_view_mode: string;
   share_files_item_zoom: number;
   clipboard_text_max_bytes: number;

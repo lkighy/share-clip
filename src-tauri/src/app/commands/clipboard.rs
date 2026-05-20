@@ -605,3 +605,26 @@ pub async fn delete_clipboard_record(app: tauri::AppHandle, id: i32) -> Result<(
         }
     }
 }
+
+/// 立即执行剪切板清理策略
+#[tauri::command]
+pub async fn cleanup_clipboard_now(app: tauri::AppHandle) -> Result<(), ApiError> {
+    let db = app.state::<DbState>();
+    let config = app.state::<AppConfigStore>().get();
+
+    crate::db::service::cleanup::cleanup_old_items(&db.conn, &config)
+        .await
+        .map_err(|e| {
+            error!("cleanup_clipboard_now cleanup_old_items failed: error={e}");
+            AppError::from(e)
+        })?;
+    crate::db::service::cleanup::cleanup_invalid_items(&db.conn, &config)
+        .await
+        .map_err(|e| {
+            error!("cleanup_clipboard_now cleanup_invalid_items failed: error={e}");
+            AppError::InvalidInput(e.to_string())
+        })?;
+
+    crate::app::events::emit_clipboard_changed(&app, Vec::new(), "clipboard_cleanup_now");
+    Ok(())
+}

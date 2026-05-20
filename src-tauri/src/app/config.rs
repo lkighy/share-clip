@@ -20,6 +20,7 @@ pub struct AppConfig {
     pub clipboard_window_width: i32,
     pub clipboard_window_height: i32,
     pub clipboard_window_spacing: i32,
+    pub theme_mode: String,
     pub share_files_view_mode: String,
     pub share_files_item_zoom: i32,
     // 普通文本超过该字节数时不保存完整内容
@@ -92,6 +93,7 @@ pub struct AppConfigUpdate {
     pub clipboard_window_width: Option<i32>,
     pub clipboard_window_height: Option<i32>,
     pub clipboard_window_spacing: Option<i32>,
+    pub theme_mode: Option<String>,
     pub share_files_view_mode: Option<String>,
     pub share_files_item_zoom: Option<i32>,
     pub clipboard_text_max_bytes: Option<u64>,
@@ -154,6 +156,12 @@ impl AppConfigUpdate {
         }
         if let Some(value) = self.clipboard_window_spacing {
             config.clipboard_window_spacing = value;
+        }
+        if let Some(value) = self.theme_mode {
+            let value = value.trim();
+            if matches!(value, "system" | "light" | "dark") {
+                config.theme_mode = value.to_string();
+            }
         }
         if let Some(value) = self.share_files_view_mode {
             let value = value.trim();
@@ -271,6 +279,7 @@ impl Default for AppConfig {
             clipboard_window_width: 420,
             clipboard_window_height: 640,
             clipboard_window_spacing: 10,
+            theme_mode: "system".to_string(),
             share_files_view_mode: "icons".to_string(),
             share_files_item_zoom: 100,
             clipboard_text_max_bytes: 4 * 1024 * 1024,

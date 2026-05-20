@@ -12,6 +12,7 @@ pub const WEB_ACCESS_REQUESTED: &str = "share://web-access-requested";
 pub const CONNECTION_STATUS_CHANGED: &str = "share://connection-status-changed";
 pub const CLIPBOARD_CHANGED: &str = "clipboard://changed";
 pub const SERVER_STATUS_CHANGED: &str = "server://status-changed";
+pub const APP_CONFIG_CHANGED: &str = "app://config-changed";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct DataChangedPayload {
@@ -53,6 +54,10 @@ pub fn emit_server_status_changed(app: &AppHandle, reason: &'static str) {
         Vec::new(),
         reason,
     );
+}
+
+pub fn emit_app_config_changed(app: &AppHandle, reason: &'static str) {
+    emit_data_changed(app, APP_CONFIG_CHANGED, "app_config", Vec::new(), reason);
 }
 
 pub fn emit_inbound_requested(app: &AppHandle, ids: Vec<String>, reason: &'static str) {

@@ -26,6 +26,28 @@
     --radius: 0.5rem;
   }
 
+  .dark {
+    --background: 222 47% 6%;
+    --foreground: 210 40% 96%;
+    --card: 222 41% 9%;
+    --card-foreground: 210 40% 96%;
+    --popover: 222 41% 9%;
+    --popover-foreground: 210 40% 96%;
+    --primary: 200 94% 48%;
+    --primary-foreground: 210 40% 98%;
+    --secondary: 217 33% 17%;
+    --secondary-foreground: 210 40% 96%;
+    --muted: 217 33% 17%;
+    --muted-foreground: 215 20% 65%;
+    --accent: 217 33% 18%;
+    --accent-foreground: 210 40% 96%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 217 33% 22%;
+    --input: 217 33% 22%;
+    --ring: 200 94% 48%;
+  }
+
   * {
     @apply border-border;
   }
@@ -117,4 +139,166 @@
   .fluent-scrollbar::-webkit-scrollbar-track {
     background: transparent;
   }
+
+  .dark .fluent-shell {
+    @apply text-slate-100;
+    background:
+      linear-gradient(180deg, rgba(15, 23, 42, 0.94), rgba(2, 6, 23, 0.98)),
+      linear-gradient(135deg, #111827 0%, #0f172a 45%, #020617 100%);
+  }
+
+  .dark .fluent-titlebar {
+    @apply border-slate-800/80;
+    background: rgba(15, 23, 42, 0.78);
+    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.04);
+  }
+
+  .dark .fluent-commandbar {
+    @apply border-slate-800/80 bg-slate-900/75;
+  }
+
+  .dark .fluent-panel {
+    @apply border-slate-800/80;
+    background: rgba(15, 23, 42, 0.78);
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  }
+
+  .dark .fluent-card {
+    @apply border-slate-800/80 bg-slate-900/80 text-slate-100;
+  }
+
+  .dark .fluent-card:hover {
+    @apply bg-slate-800/90;
+    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.26);
+  }
+
+  .dark .fluent-input {
+    @apply border-slate-700/80 bg-slate-950/70 text-slate-100;
+  }
+
+  .dark .fluent-input::placeholder {
+    color: rgb(100 116 139);
+  }
+
+  .dark .fluent-input:focus {
+    @apply border-sky-400 ring-sky-400/20;
+  }
+
+  .dark .fluent-check {
+    @apply border-slate-600 text-sky-400 accent-sky-500;
+  }
+
+  .dark .fluent-segment {
+    @apply border-slate-800 bg-slate-950/70;
+  }
+
+  .dark .fluent-segment-button {
+    @apply text-slate-400 hover:bg-slate-800 hover:text-slate-100;
+  }
+
+  .dark .fluent-segment-button-active {
+    @apply bg-slate-800 text-slate-100 shadow-none;
+  }
+
+  .dark .fluent-scrollbar {
+    scrollbar-color: rgba(148, 163, 184, 0.45) transparent;
+  }
+
+  .dark .fluent-scrollbar::-webkit-scrollbar-thumb {
+    background: rgba(148, 163, 184, 0.34);
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+}
+
+.dark [class~="text-slate-950"],
+.dark [class~="text-slate-900"],
+.dark [class~="text-slate-800"] {
+  color: rgb(241 245 249);
+}
+
+.dark [class~="text-slate-700"],
+.dark [class~="text-slate-600"] {
+  color: rgb(203 213 225);
+}
+
+.dark [class~="text-slate-500"],
+.dark [class~="text-slate-400"] {
+  color: rgb(148 163 184);
+}
+
+.dark [class~="bg-white"],
+.dark [class~="bg-white/95"],
+.dark [class~="bg-white/90"],
+.dark [class~="bg-white/85"],
+.dark [class~="bg-white/80"],
+.dark [class~="bg-white/75"],
+.dark [class~="bg-white/70"],
+.dark [class~="bg-white/65"] {
+  background-color: rgb(15 23 42);
+}
+
+.dark [class~="bg-slate-50"],
+.dark [class~="bg-slate-50/70"],
+.dark [class~="bg-slate-100"],
+.dark [class~="bg-slate-100/70"],
+.dark [class~="bg-slate-100/80"] {
+  background-color: rgb(30 41 59);
+}
+
+.dark [class~="border-white/70"],
+.dark [class~="border-slate-100"],
+.dark [class~="border-slate-200"],
+.dark [class~="border-slate-200/60"],
+.dark [class~="border-slate-200/70"],
+.dark [class~="border-slate-200/80"],
+.dark [class~="border-slate-300/80"] {
+  border-color: rgb(30 41 59);
+}
+
+.dark [class~="ring-slate-100"],
+.dark [class~="ring-slate-200"] {
+  --tw-ring-color: rgb(30 41 59);
+}
+
+.dark [class~="hover:bg-white"]:hover,
+.dark [class~="hover:bg-white/70"]:hover,
+.dark [class~="hover:bg-white/80"]:hover,
+.dark [class~="hover:bg-slate-100"]:hover,
+.dark [class~="hover:bg-slate-200/70"]:hover {
+  background-color: rgb(30 41 59);
+}
+
+.dark [class~="hover:text-slate-950"]:hover {
+  color: rgb(241 245 249);
+}
+
+.dark [class~="bg-red-50"],
+.dark [class~="hover:bg-red-50"]:hover {
+  background-color: rgb(69 10 10 / 0.4);
+}
+
+.dark [class~="bg-sky-50"],
+.dark [class~="bg-sky-100"],
+.dark [class~="bg-sky-100/80"],
+.dark [class~="hover:bg-sky-50"]:hover {
+  background-color: rgb(8 47 73 / 0.45);
+}
+
+.dark [class~="bg-amber-50/80"] {
+  background-color: rgb(69 26 3 / 0.35);
+}
+
+.dark [class~="border-sky-100"],
+.dark [class~="border-sky-100/80"],
+.dark [class~="border-sky-200"] {
+  border-color: rgb(12 74 110 / 0.7);
+}
+
+.dark [class~="border-amber-200"] {
+  border-color: rgb(120 53 15 / 0.7);
+}
+
+.dark [class~="bg-black/20"] {
+  background-color: rgb(0 0 0 / 0.5);
 }

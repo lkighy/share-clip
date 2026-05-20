@@ -17,6 +17,10 @@ export function openLogDir() {
   return call<void>("open_log_dir");
 }
 
+export function cleanupClipboardNow() {
+  return call<void>("cleanup_clipboard_now");
+}
+
 export type LocalDeviceInfo = {
   device_id: string;
   device_name: string;

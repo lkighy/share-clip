@@ -63,6 +63,7 @@ pub fn update_app_config(
             .map_err(AppError::InvalidInput)?;
     }
     crate::app::ui::tray::update_share_server_menu_label(&app);
+    crate::app::events::emit_app_config_changed(&app, "app_config_updated");
 
     Ok(updated)
 }

@@ -53,7 +53,7 @@ pub fn run() {
         .setup(|app| {
             let config_store = AppConfigStore::load();
             let config = config_store.get();
-            let db = tauri::async_runtime::block_on(init_db())
+            let db = tauri::async_runtime::block_on(init_db(&app.handle()))
                 .map_err(|err| format!("failed to initialize sqlite database: {err}"))?;
 
             let config_clone = config.clone();
@@ -115,6 +115,7 @@ pub fn run() {
             clipboard::toggle_favorite,
             clipboard::toggle_share,
             clipboard::delete_clipboard_record,
+            clipboard::cleanup_clipboard_now,
             config_commands::get_app_config,
             config_commands::get_local_device_info,
             config_commands::update_app_config,
