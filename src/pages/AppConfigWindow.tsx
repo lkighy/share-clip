@@ -1,5 +1,4 @@
 import type { MouseEvent } from "react";
-import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { toast } from "sonner";
@@ -12,6 +11,7 @@ import type { AppConfig, AppConfigUpdate } from "@/api/types/appConfig";
 import { getShareServerIpOptions, openLogDir } from "@/api/appConfig.ts";
 import { loadAppConfig, saveAppConfig, useAppConfigStore } from "@/store/appConfigStore";
 import HotkeyInput from "@/components/ui/HotkeyInput.tsx";
+import { SettingsRow, SettingsSection } from "@/components/settings/SettingsLayout";
 import { operationWindow } from "@/api/window.ts";
 
 type AppConfigForm = {
@@ -20,6 +20,9 @@ type AppConfigForm = {
   clipboard_window_width: string;
   clipboard_window_height: string;
   clipboard_window_spacing: string;
+  clipboard_text_max_mb: string;
+  clipboard_rich_format_max_mb: string;
+  clipboard_total_max_mb: string;
   auto_cleanup_invalid_clipboard_data: boolean;
   cache_dir: string;
   remote_cache_dir: string;
@@ -50,32 +53,15 @@ type AppConfigForm = {
   popup_on_inbound_request: boolean;
 };
 
-function SettingsSection({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <section className="fluent-panel overflow-hidden">
-      <div className="border-b border-slate-200/70 px-4 py-3">
-        <h2 className="text-sm font-semibold text-slate-950">{title}</h2>
-      </div>
-      <div className="divide-y divide-slate-200/70">{children}</div>
-    </section>
-  );
-}
-
-function SettingsRow({ label, children, wide = false }: { label: string; children: ReactNode; wide?: boolean }) {
-  return (
-    <label className={`grid gap-2 px-4 py-3 text-sm ${wide ? "sm:grid-cols-[1fr_2fr]" : "sm:grid-cols-[1fr_220px]"} sm:items-center`}>
-      <span className="font-medium text-slate-700">{label}</span>
-      <div className="min-w-0">{children}</div>
-    </label>
-  );
-}
-
 const emptyForm: AppConfigForm = {
   local_device_name: "",
   shortcut: "",
   clipboard_window_width: "",
   clipboard_window_height: "",
   clipboard_window_spacing: "",
+  clipboard_text_max_mb: "4",
+  clipboard_rich_format_max_mb: "8",
+  clipboard_total_max_mb: "16",
   auto_cleanup_invalid_clipboard_data: true,
   cache_dir: "",
   remote_cache_dir: "",
@@ -113,6 +99,9 @@ function toForm(config: AppConfig): AppConfigForm {
     clipboard_window_width: String(config.clipboard_window_width ?? ""),
     clipboard_window_height: String(config.clipboard_window_height ?? ""),
     clipboard_window_spacing: String(config.clipboard_window_spacing ?? ""),
+    clipboard_text_max_mb: bytesToMbString(config.clipboard_text_max_bytes ?? 4 * BYTES_PER_MB),
+    clipboard_rich_format_max_mb: bytesToMbString(config.clipboard_rich_format_max_bytes ?? 8 * BYTES_PER_MB),
+    clipboard_total_max_mb: bytesToMbString(config.clipboard_total_max_bytes ?? 16 * BYTES_PER_MB),
     auto_cleanup_invalid_clipboard_data: config.auto_cleanup_invalid_clipboard_data ?? true,
     cache_dir: config.cache_dir ?? "",
     remote_cache_dir: config.remote_cache_dir ?? "",
@@ -142,6 +131,16 @@ function toForm(config: AppConfig): AppConfigForm {
     sync_access_enabled: config.sync_access_enabled ?? true,
     popup_on_inbound_request: config.popup_on_inbound_request ?? false,
   };
+}
+
+const BYTES_PER_MB = 1024 * 1024;
+
+function bytesToMbString(value: number) {
+  return String(Math.round(value / BYTES_PER_MB));
+}
+
+function mbToBytes(value: number) {
+  return value * BYTES_PER_MB;
 }
 
 function parseInteger(value: string, fieldLabel: string, min: number) {
@@ -252,6 +251,9 @@ export default function AppConfigWindow() {
       const width = parseInteger(form.clipboard_window_width, "窗口宽度", 120);
       const height = parseInteger(form.clipboard_window_height, "窗口高度", 120);
       const spacing = parseInteger(form.clipboard_window_spacing, "窗口间距", 0);
+      const clipboardTextMaxMb = parseInteger(form.clipboard_text_max_mb, "普通文本入库上限", 1);
+      const clipboardRichFormatMaxMb = parseInteger(form.clipboard_rich_format_max_mb, "单个富文本入库上限", 1);
+      const clipboardTotalMaxMb = parseInteger(form.clipboard_total_max_mb, "富文本总保留上限", 1);
       const shareServerPort = parseInteger(form.share_server_port, "共享服务端口", 1);
       const shareServerAuthMode = parseInteger(form.share_server_auth_mode, "授权模式", 0);
       const webAccessCookieTtl = parseInteger(form.web_access_cookie_ttl_seconds, "Web 授权有效期", 60);
@@ -281,6 +283,9 @@ export default function AppConfigWindow() {
         clipboard_window_width: width,
         clipboard_window_height: height,
         clipboard_window_spacing: spacing,
+        clipboard_text_max_bytes: mbToBytes(clipboardTextMaxMb),
+        clipboard_rich_format_max_bytes: mbToBytes(clipboardRichFormatMaxMb),
+        clipboard_total_max_bytes: mbToBytes(clipboardTotalMaxMb),
         auto_cleanup_invalid_clipboard_data: form.auto_cleanup_invalid_clipboard_data,
         cache_dir: cacheDir,
         remote_cache_dir: remoteCacheDir,
@@ -340,43 +345,43 @@ export default function AppConfigWindow() {
         {data ? (
           <div className="mx-auto max-w-4xl space-y-4">
             <SettingsSection title="共享服务器">
-                <SettingsRow label="本机设备名称">
-                  <input className="fluent-input" value={form.local_device_name} onChange={(e) => setForm((prev) => ({ ...prev, local_device_name: e.target.value }))} placeholder="本机设备" />
-                </SettingsRow>
-                <SettingsRow label="自动启动">
-                  <input className="fluent-check" type="checkbox" checked={form.auto_start_share_server} onChange={(e) => setForm((prev) => ({ ...prev, auto_start_share_server: e.target.checked }))} />
-                </SettingsRow>
-                <SettingsRow label="绑定 IP">
-                  <select className="fluent-input" value={form.share_server_bind_ip} onChange={(e) => setForm((prev) => ({ ...prev, share_server_bind_ip: e.target.value }))}>
-                    {ipOptions.map((ip) => (
-                      <option key={ip} value={ip}>{ip}</option>
-                    ))}
-                  </select>
-                </SettingsRow>
-                <SettingsRow label="端口">
-                  <input className="fluent-input" value={form.share_server_port} onChange={(e) => setForm((prev) => ({ ...prev, share_server_port: e.target.value }))} placeholder="24800" />
-                </SettingsRow>
-                <SettingsRow label="访问密码">
-                  <input className="fluent-check" type="checkbox" checked={form.share_server_password_enabled} onChange={(e) => setForm((prev) => ({ ...prev, share_server_password_enabled: e.target.checked }))} />
-                </SettingsRow>
-                <SettingsRow label="连接密码" wide>
-                  <input className="fluent-input" type="password" value={form.share_server_password_hash} onChange={(e) => setForm((prev) => ({ ...prev, share_server_password_hash: e.target.value }))} placeholder="远程连接申请时校验" />
-                </SettingsRow>
-                <SettingsRow label="授权模式">
-                  <select className="fluent-input" value={form.share_server_auth_mode} onChange={(e) => setForm((prev) => ({ ...prev, share_server_auth_mode: e.target.value }))}>
-                    <option value="1">需要确认</option>
-                    <option value="0">自动授权</option>
-                  </select>
-                </SettingsRow>
-                <SettingsRow label="浏览器访问">
-                  <input className="fluent-check" type="checkbox" checked={form.browser_access_enabled} onChange={(e) => setForm((prev) => ({ ...prev, browser_access_enabled: e.target.checked }))} />
-                </SettingsRow>
-                <SettingsRow label="客户端同步">
-                  <input className="fluent-check" type="checkbox" checked={form.sync_access_enabled} onChange={(e) => setForm((prev) => ({ ...prev, sync_access_enabled: e.target.checked }))} />
-                </SettingsRow>
-                <SettingsRow label="连接申请弹窗">
-                  <input className="fluent-check" type="checkbox" checked={form.popup_on_inbound_request} onChange={(e) => setForm((prev) => ({ ...prev, popup_on_inbound_request: e.target.checked }))} />
-                </SettingsRow>
+              <SettingsRow label="本机设备名称">
+                <input className="fluent-input" value={form.local_device_name} onChange={(e) => setForm((prev) => ({ ...prev, local_device_name: e.target.value }))} placeholder="本机设备" />
+              </SettingsRow>
+              <SettingsRow label="自动启动">
+                <input className="fluent-check" type="checkbox" checked={form.auto_start_share_server} onChange={(e) => setForm((prev) => ({ ...prev, auto_start_share_server: e.target.checked }))} />
+              </SettingsRow>
+              <SettingsRow label="绑定 IP">
+                <select className="fluent-input" value={form.share_server_bind_ip} onChange={(e) => setForm((prev) => ({ ...prev, share_server_bind_ip: e.target.value }))}>
+                  {ipOptions.map((ip) => (
+                    <option key={ip} value={ip}>{ip}</option>
+                  ))}
+                </select>
+              </SettingsRow>
+              <SettingsRow label="端口">
+                <input className="fluent-input" value={form.share_server_port} onChange={(e) => setForm((prev) => ({ ...prev, share_server_port: e.target.value }))} placeholder="24800" />
+              </SettingsRow>
+              <SettingsRow label="访问密码">
+                <input className="fluent-check" type="checkbox" checked={form.share_server_password_enabled} onChange={(e) => setForm((prev) => ({ ...prev, share_server_password_enabled: e.target.checked }))} />
+              </SettingsRow>
+              <SettingsRow label="连接密码" wide>
+                <input className="fluent-input" type="password" value={form.share_server_password_hash} onChange={(e) => setForm((prev) => ({ ...prev, share_server_password_hash: e.target.value }))} placeholder="远程连接申请时校验" />
+              </SettingsRow>
+              <SettingsRow label="授权模式">
+                <select className="fluent-input" value={form.share_server_auth_mode} onChange={(e) => setForm((prev) => ({ ...prev, share_server_auth_mode: e.target.value }))}>
+                  <option value="1">需要确认</option>
+                  <option value="0">自动授权</option>
+                </select>
+              </SettingsRow>
+              <SettingsRow label="浏览器访问">
+                <input className="fluent-check" type="checkbox" checked={form.browser_access_enabled} onChange={(e) => setForm((prev) => ({ ...prev, browser_access_enabled: e.target.checked }))} />
+              </SettingsRow>
+              <SettingsRow label="客户端同步">
+                <input className="fluent-check" type="checkbox" checked={form.sync_access_enabled} onChange={(e) => setForm((prev) => ({ ...prev, sync_access_enabled: e.target.checked }))} />
+              </SettingsRow>
+              <SettingsRow label="连接申请弹窗">
+                <input className="fluent-check" type="checkbox" checked={form.popup_on_inbound_request} onChange={(e) => setForm((prev) => ({ ...prev, popup_on_inbound_request: e.target.checked }))} />
+              </SettingsRow>
             </SettingsSection>
 
             <SettingsSection title="Web 访问授权">
@@ -435,6 +440,18 @@ export default function AppConfigWindow() {
                   <FolderOpen size={15} />
                   打开
                 </Button>
+              </SettingsRow>
+            </SettingsSection>
+
+            <SettingsSection title="剪切板性能保护">
+              <SettingsRow label="普通文本入库上限 (MB)">
+                <input className="fluent-input" value={form.clipboard_text_max_mb} onChange={(e) => setForm((prev) => ({ ...prev, clipboard_text_max_mb: e.target.value }))} placeholder="4" />
+              </SettingsRow>
+              <SettingsRow label="单个富文本入库上限 (MB)">
+                <input className="fluent-input" value={form.clipboard_rich_format_max_mb} onChange={(e) => setForm((prev) => ({ ...prev, clipboard_rich_format_max_mb: e.target.value }))} placeholder="8" />
+              </SettingsRow>
+              <SettingsRow label="富文本总保留上限 (MB)">
+                <input className="fluent-input" value={form.clipboard_total_max_mb} onChange={(e) => setForm((prev) => ({ ...prev, clipboard_total_max_mb: e.target.value }))} placeholder="16" />
               </SettingsRow>
             </SettingsSection>
 

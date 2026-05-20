@@ -2,14 +2,15 @@ use clipboard_rs::{
     Clipboard, ClipboardContext, ClipboardHandler, ClipboardWatcher, ClipboardWatcherContext,
     ContentFormat,
 };
-use log::{error, info};
+use log::{error, info, warn};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
+use crate::app::config::AppConfigStore;
 use crate::services::clipboard_storage::save_clipboard_item;
 use crate::utils::format::normalize_file_uri;
 
@@ -18,6 +19,7 @@ static SUPPRESSED_CLIPBOARD_CHANGE_UNTIL_MS: AtomicU64 = AtomicU64::new(0);
 
 pub struct AppClipboardHandler {
     pub tx: Sender<ClipboardChangeEvent>,
+    pub app_handle: AppHandle,
 }
 
 #[derive(Debug, Clone)]
@@ -96,6 +98,7 @@ impl ClipboardHandler for AppClipboardHandler {
         info!("[Watcher] clipboard changed.");
 
         if let Ok(ctx) = ClipboardContext::new() {
+            let config = self.app_handle.state::<AppConfigStore>().get();
             // Priority: Files -> rich text/text bundle -> Image.
             if ctx.has(ContentFormat::Files) {
                 let files = ctx.get_files().unwrap_or_default();
@@ -124,9 +127,39 @@ impl ClipboardHandler for AppClipboardHandler {
             let has_html = ctx.has(ContentFormat::Html);
             let has_rtf = ctx.has(ContentFormat::Rtf);
             if has_text || has_html || has_rtf {
-                let text = if has_text { ctx.get_text().ok() } else { None };
-                let html = if has_html { ctx.get_html().ok() } else { None };
-                let rtf = if has_rtf {
+                let mut projected_size = 0u64;
+                let text = if should_read_clipboard_format(
+                    "text/plain",
+                    clipboard_text_format_size(),
+                    config.clipboard_text_max_bytes,
+                    config.clipboard_total_max_bytes,
+                    &mut projected_size,
+                ) && has_text
+                {
+                    ctx.get_text().ok()
+                } else {
+                    None
+                };
+                let html = if should_read_clipboard_format(
+                    "text/html",
+                    clipboard_registered_format_size("HTML Format"),
+                    config.clipboard_rich_format_max_bytes,
+                    config.clipboard_total_max_bytes,
+                    &mut projected_size,
+                ) && has_html
+                {
+                    ctx.get_html().ok()
+                } else {
+                    None
+                };
+                let rtf = if should_read_clipboard_format(
+                    "text/rtf",
+                    clipboard_registered_format_size("Rich Text Format"),
+                    config.clipboard_rich_format_max_bytes,
+                    config.clipboard_total_max_bytes,
+                    &mut projected_size,
+                ) && has_rtf
+                {
                     ctx.get_rich_text().ok()
                 } else {
                     None
@@ -143,6 +176,9 @@ impl ClipboardHandler for AppClipboardHandler {
                     let _ = self.tx.send(ClipboardChangeEvent::Text(text));
                     return;
                 }
+
+                warn!("skip text/rich clipboard because no readable format passed size limits");
+                return;
             }
 
             if ctx.has(ContentFormat::Image) {
@@ -158,7 +194,10 @@ impl ClipboardHandler for AppClipboardHandler {
 
 pub fn start_clipboard_watcher(app_handle: AppHandle) -> clipboard_rs::WatcherShutdown {
     let (tx, rx) = mpsc::channel::<ClipboardChangeEvent>();
-    let handler = AppClipboardHandler { tx };
+    let handler = AppClipboardHandler {
+        tx,
+        app_handle: app_handle.clone(),
+    };
 
     let mut watcher = ClipboardWatcherContext::new().expect("Failed to create clipboard watcher");
     let shutdown = watcher.add_handler(handler).get_shutdown_channel();
@@ -183,4 +222,59 @@ pub fn start_clipboard_watcher(app_handle: AppHandle) -> clipboard_rs::WatcherSh
     });
 
     shutdown
+}
+
+fn should_read_clipboard_format(
+    label: &str,
+    size_hint: Option<usize>,
+    format_limit: u64,
+    total_limit: u64,
+    projected_size: &mut u64,
+) -> bool {
+    let Some(size) = size_hint.map(|size| size as u64) else {
+        return true;
+    };
+    if size > format_limit {
+        warn!("skip clipboard format {label}: size={size} bytes, limit={format_limit} bytes");
+        return false;
+    }
+    let next_total = projected_size.saturating_add(size);
+    if next_total > total_limit {
+        warn!("skip clipboard format {label}: projected_total={next_total} bytes, limit={total_limit} bytes");
+        return false;
+    }
+    *projected_size = next_total;
+    true
+}
+
+#[cfg(target_os = "windows")]
+fn clipboard_text_format_size() -> Option<usize> {
+    clipboard_format_size(clipboard_win::formats::CF_UNICODETEXT)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn clipboard_text_format_size() -> Option<usize> {
+    None
+}
+
+#[cfg(target_os = "windows")]
+fn clipboard_registered_format_size(name: &str) -> Option<usize> {
+    clipboard_win::raw::register_format(name).and_then(|format| clipboard_format_size(format.get()))
+}
+
+#[cfg(not(target_os = "windows"))]
+fn clipboard_registered_format_size(_name: &str) -> Option<usize> {
+    None
+}
+
+#[cfg(target_os = "windows")]
+fn clipboard_format_size(format: u32) -> Option<usize> {
+    clipboard_win::raw::open().ok()?;
+    let size = if clipboard_win::raw::is_format_avail(format) {
+        clipboard_win::raw::size(format).map(|value| value.get())
+    } else {
+        None
+    };
+    let _ = clipboard_win::raw::close();
+    size
 }

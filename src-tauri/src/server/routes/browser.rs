@@ -5,7 +5,7 @@ use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder};
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
 
@@ -791,18 +791,12 @@ async fn list_clipboard(
 
     let page = query.page.unwrap_or(1).max(1);
     let page_size = query.page_size.unwrap_or(20).clamp(1, 100);
-    let offset = (page - 1) * page_size;
-    let rows = match clipboard_record::Entity::find()
-        .filter(clipboard_record::Column::IsShared.eq(1))
-        .order_by_desc(clipboard_record::Column::IsFavorite)
-        .order_by_desc(clipboard_record::Column::LastAccessedAt)
-        .order_by_desc(clipboard_record::Column::CreatedAt)
-        .offset(offset)
-        .limit(page_size)
-        .all(&state.db)
-        .await
+    let responses = match crate::db::service::clipboard::list_shared_records(
+        &state.db, page, page_size,
+    )
+    .await
     {
-        Ok(rows) => rows,
+        Ok(responses) => responses,
         Err(e) => {
             return json_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -810,21 +804,6 @@ async fn list_clipboard(
             )
         }
     };
-
-    let mut responses = Vec::with_capacity(rows.len());
-    for row in rows {
-        match crate::db::service::clipboard::clipboard_response_from_model_with_db(&state.db, row)
-            .await
-        {
-            Ok(response) => responses.push(response),
-            Err(e) => {
-                return json_error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("database error: {e}"),
-                )
-            }
-        }
-    }
 
     Json(responses).into_response()
 }

@@ -21,6 +21,7 @@ import {
   Server,
   ShieldCheck,
   ShieldQuestion,
+  Star,
   Trash2,
   XCircle,
   X,
@@ -30,6 +31,7 @@ import {
 
 import { Toaster } from "@/components/ui/sonner";
 import { Button } from "@/components/ui/button";
+import { TransferPanel, type TransferChildTask, type TransferTask, type TransferTaskKind, type TransferTaskStatus } from "@/components/share-files/TransferPanel";
 import { operationWindow } from "@/api/window";
 import { getLocalDeviceInfo, type LocalDeviceInfo } from "@/api/appConfig";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -52,6 +54,7 @@ import {
   revealRemoteSharedCache,
   setInboundConnectionAuthStatus,
   setWebAccessRequestAuthStatus,
+  toggleLocalSharedFileFavorite,
   type InboundConnectionRequest,
   type LocalSharedFileItem,
   type RemoteCachedFileItem,
@@ -159,41 +162,6 @@ type RemoteAuthHeaders = {
   deviceId: string;
 };
 
-type TransferTaskKind = "download" | "sync";
-type TransferTaskStatus = "queued" | "running" | "done" | "error";
-
-type TransferTask = {
-  id: string;
-  itemKey: string;
-  kind: TransferTaskKind;
-  status: TransferTaskStatus;
-  remoteUserId: string;
-  remoteUserName: string;
-  shareId: string;
-  shareName: string;
-  relativePath: string;
-  name: string;
-  isDir: boolean;
-  progress: number;
-  loadedBytes?: number;
-  totalBytes?: number | null;
-  message?: string;
-  startedAt: number;
-  updatedAt: number;
-  children?: TransferChildTask[];
-};
-
-type TransferChildTask = {
-  id: string;
-  relativePath: string;
-  name: string;
-  status: TransferTaskStatus | "cached";
-  progress: number;
-  loadedBytes?: number;
-  totalBytes?: number | null;
-  message?: string;
-};
-
 type TransferProgress = {
   loaded: number;
   total?: number | null;
@@ -201,6 +169,10 @@ type TransferProgress = {
 };
 
 type ConnectionDialogMode = "add" | "edit" | "reauth";
+
+function initialTabFromLocation(): TabKey {
+  return new URLSearchParams(window.location.search).get("tab") === "devices" ? "devices" : "mine";
+}
 
 const WEB_SCOPE_LABELS: Record<string, string> = {
   files: "文件共享",
@@ -360,6 +332,16 @@ function cleanDisplayName(raw: string | undefined, fallback: string) {
   const parts = source.split(/[\\/]/);
   const base = parts[parts.length - 1] || source;
   return base.replace(/^[^\w\u4e00-\u9fa5]+/, "").replace(/\s+\([^)]+\)\s*$/, "");
+}
+
+function sortLocalSharedFiles(items: LocalSharedFileItem[]) {
+  return [...items].sort((a, b) => {
+    const favoriteDiff = (b.is_favorite ?? 0) - (a.is_favorite ?? 0);
+    if (favoriteDiff !== 0) return favoriteDiff;
+    const createdDiff = (b.created_at ?? 0) - (a.created_at ?? 0);
+    if (createdDiff !== 0) return createdDiff;
+    return a.path.localeCompare(b.path);
+  });
 }
 
 function isRemoteRootPath(path?: string | null) {
@@ -563,7 +545,7 @@ function applyCacheToRemoteNode(node: RemoteFileNode, cached?: RemoteCachedFileI
 
 export default function ShareFilesWindow() {
   const { data: appConfig } = useAppConfigStore();
-  const [tab, setTab] = useState<TabKey>("mine");
+  const [tab, setTab] = useState<TabKey>(() => initialTabFromLocation());
   const [viewMode, setViewMode] = useState<ViewMode>("icons");
   const [itemZoom, setItemZoom] = useState(100);
   const [shareFilesPrefsReady, setShareFilesPrefsReady] = useState(false);
@@ -1129,7 +1111,7 @@ export default function ShareFilesWindow() {
     if (mineLoading) return;
     setMineLoading(true);
     try {
-      setMySharedFiles(await listLocalSharedFiles());
+      setMySharedFiles(sortLocalSharedFiles(await listLocalSharedFiles()));
     } catch (error) {
       console.error(error);
       toast.error("加载我分享的文件失败");
@@ -1675,6 +1657,21 @@ export default function ShareFilesWindow() {
     }
   };
 
+  const handleToggleLocalFavorite = async (id: string) => {
+    try {
+      const isFavorite = await toggleLocalSharedFileFavorite(id);
+      setMySharedFiles((prev) =>
+        sortLocalSharedFiles(
+          prev.map((item) => (item.id === id ? { ...item, is_favorite: isFavorite ? 1 : 0 } : item)),
+        ),
+      );
+      toast.success(isFavorite ? "已收藏" : "已取消收藏");
+    } catch (error) {
+      console.error(error);
+      toast.error("收藏操作失败");
+    }
+  };
+
   useEffect(() => {
     const preventNativeContextMenu = (event: globalThis.MouseEvent) => {
       event.preventDefault();
@@ -1928,6 +1925,8 @@ export default function ShareFilesWindow() {
     remoteTarget?: RemoteContextTarget,
     secondaryActionLabel?: string,
     onSecondaryAction?: () => void,
+    isFavorite = false,
+    onFavoriteToggle?: () => void,
   ) => {
     const displayPath = formatDisplayPath(path);
     const remoteDeleted = Boolean(remoteTarget?.remoteDeleted);
@@ -1988,6 +1987,21 @@ export default function ShareFilesWindow() {
           <span className={`text-xs text-slate-500 ${contentLayerClassName}`}>{isDir ? "文件夹" : formatSize(size)}</span>
           <span className={`text-xs text-slate-500 ${contentLayerClassName}`}>{modified ?? "未知"}</span>
           <div className={`flex justify-end gap-2 ${contentLayerClassName}`}>
+            {onFavoriteToggle ? (
+              <Button
+                size="icon"
+                variant="ghost"
+                className="h-8 w-8 rounded-md hover:bg-slate-100"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onFavoriteToggle();
+                }}
+                aria-label={isFavorite ? "取消收藏" : "收藏"}
+                title={isFavorite ? "取消收藏" : "收藏"}
+              >
+                <Star size={14} className={isFavorite ? "fill-yellow-500 text-yellow-500" : "text-slate-500"} />
+              </Button>
+            ) : null}
             {actionLabel && onAction ? (
               <Button size="sm" variant="outline" onClick={onAction}>
                 {actionLabel === "下载" ? <Download size={13} className="mr-1" /> : actionLabel === "打开" ? <FolderOpen size={13} className="mr-1" /> : actionLabel === "同步" ? <RefreshCcw size={13} className="mr-1" /> : null}
@@ -2015,8 +2029,10 @@ export default function ShareFilesWindow() {
     }
 
     return (
-      <button
+      <div
         key={key}
+        role="button"
+        tabIndex={0}
         className={`fluent-card relative w-full self-start overflow-hidden p-3 text-left ${viewMode === "icons" ? "flex flex-col items-center" : "flex items-center gap-3"} ${hasProgress ? "bg-white/80" : ""} ${remoteDeletedClassName}`}
         style={
           viewMode === "icons"
@@ -2033,6 +2049,20 @@ export default function ShareFilesWindow() {
           openLocalContextMenu(e, key, Boolean(onReveal), Boolean(onContextAction));
         }}
       >
+        {onFavoriteToggle ? (
+          <button
+            type="button"
+            className={`absolute right-2 top-2 z-20 flex h-7 w-7 items-center justify-center rounded-md bg-white/90 text-slate-500 shadow-sm ring-1 ring-slate-200 transition hover:bg-white ${isFavorite ? "text-yellow-500" : ""}`}
+            onClick={(event) => {
+              event.stopPropagation();
+              onFavoriteToggle();
+            }}
+            aria-label={isFavorite ? "取消收藏" : "收藏"}
+            title={isFavorite ? "取消收藏" : "收藏"}
+          >
+            <Star size={14} className={isFavorite ? "fill-yellow-500 text-yellow-500" : ""} />
+          </button>
+        ) : null}
         {hasProgress ? <span className="pointer-events-none absolute inset-0" style={progressLayerStyle} /> : null}
         <span className={contentLayerClassName}>{renderVisual(visualSize, glyphSize)}</span>
         <div className={`${viewMode === "icons" ? "mt-2 text-center" : "min-w-0"} ${contentLayerClassName} w-full`}>
@@ -2040,85 +2070,7 @@ export default function ShareFilesWindow() {
           {remoteDeleted ? <div className="mt-0.5 truncate text-[11px] text-slate-500">对方已取消分享</div> : null}
           {viewMode === "tiles" ? <div className="text-xs text-slate-500">{isDir ? "文件夹" : formatSize(size)}</div> : null}
         </div>
-      </button>
-    );
-  };
-
-  const renderTransferPanel = () => {
-    if (!transferPanelOpen) return null;
-
-    return (
-      <section data-transfer-panel="true" className="absolute right-3 top-[52px] z-30 w-[380px] max-w-[calc(100vw-24px)] rounded-lg border border-sky-100 bg-white/95 shadow-xl backdrop-blur">
-        <div className="flex items-center justify-between border-b border-sky-100/80 px-3 py-2">
-          <div className="flex items-center gap-2">
-            <RefreshCcw size={14} className="text-sky-600" />
-            <span className="text-sm font-semibold text-slate-900">下载/同步任务</span>
-          </div>
-          <span className="rounded-full bg-sky-50 px-2 py-0.5 text-xs text-sky-700">{activeTransferTasks.length} 个进行中</span>
-        </div>
-        <div className="max-h-[420px] overflow-y-auto p-2">
-          {transferTasks.length === 0 ? (
-            <div className="rounded-md bg-slate-50 px-3 py-2 text-sm text-slate-500">暂无同步任务</div>
-          ) : null}
-          <div className="space-y-2">
-            {transferTasks.map((task) => {
-              const progress = clampProgress(task.progress);
-              const actionLabel = task.kind === "download" ? "下载" : task.isDir ? "同步文件夹" : "同步文件";
-              const statusLabel = task.status === "error" ? "失败" : task.status === "done" ? "完成" : actionLabel;
-              const iconClassName = task.status === "error" ? "shrink-0 text-red-600" : task.status === "done" ? "shrink-0 text-emerald-600" : "shrink-0 text-sky-600";
-              return (
-                <div
-                  key={task.id}
-                  className="relative overflow-hidden rounded-md border border-slate-200 bg-white px-3 py-2"
-                  style={{
-                    background: `linear-gradient(to right, rgba(14, 165, 233, 0.18) ${progress}%, rgba(255, 255, 255, 0.92) ${progress}%)`,
-                  }}
-                >
-                  <div className="relative z-10 flex items-center justify-between gap-3">
-                    <div className="flex min-w-0 items-center gap-2">
-                      {task.kind === "download" ? <Download size={14} className={iconClassName} /> : <RefreshCcw size={14} className={iconClassName} />}
-                      <div className="min-w-0">
-                        <div className="truncate text-sm font-medium text-slate-800">{task.name}</div>
-                        <div className="truncate text-xs text-slate-500">
-                          {statusLabel} · {task.remoteUserName} / {task.shareName}
-                          {task.totalBytes ? ` · ${formatSize(task.loadedBytes)} / ${formatSize(task.totalBytes)}` : ""}
-                          {task.message ? ` · ${task.message}` : ""}
-                        </div>
-                      </div>
-                    </div>
-                    <div className="shrink-0 text-sm font-semibold tabular-nums text-sky-700">{Math.round(progress)}%</div>
-                  </div>
-                  {task.children?.length ? (
-                    <div className="relative z-10 mt-2 space-y-1 border-t border-slate-200/70 pt-2">
-                      {task.children.map((child) => {
-                        const childProgress = clampProgress(child.progress);
-                        return (
-                          <div key={child.id} className="relative overflow-hidden rounded border border-slate-200/60 bg-white/80 px-2 py-1">
-                            <div
-                              className="pointer-events-none absolute inset-y-0 left-0 bg-sky-100/80"
-                              style={{ width: `${childProgress}%` }}
-                            />
-                            <div className="relative z-10 flex items-center justify-between gap-2">
-                              <div className="min-w-0">
-                                <div className="truncate text-xs font-medium text-slate-700">{child.name}</div>
-                                <div className="truncate text-[11px] text-slate-500">
-                                  {child.status === "cached" ? "已缓存" : child.status === "queued" ? "等待中" : child.status === "running" ? "同步中" : child.message ?? "已完成"}
-                                  {child.totalBytes ? ` · ${formatSize(child.loadedBytes)} / ${formatSize(child.totalBytes)}` : ""}
-                                </div>
-                              </div>
-                              <span className="shrink-0 text-xs font-medium tabular-nums text-slate-600">{Math.round(childProgress)}%</span>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  ) : null}
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      </section>
+      </div>
     );
   };
 
@@ -2294,6 +2246,16 @@ export default function ShareFilesWindow() {
         <div className="flex items-center gap-2">
           <Button
             variant="ghost"
+            size="sm"
+            className={`relative h-8 rounded-md px-2.5 ${tab === "devices" ? "bg-slate-200/70 text-slate-950" : "hover:bg-slate-200/70"}`}
+            onClick={() => setTab("devices")}
+          >
+            <ShieldQuestion size={14} className="mr-1" />
+            设备连接
+            {inboundRequests.length + webAccessRequests.length > 0 ? <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-red-500 ring-2 ring-white" /> : null}
+          </Button>
+          <Button
+            variant="ghost"
             size="icon"
             data-transfer-panel="true"
             title="下载/同步任务"
@@ -2329,10 +2291,6 @@ export default function ShareFilesWindow() {
           <div className="flex min-w-0 items-center gap-1 overflow-x-auto">
             <button className={`rounded-md px-3 py-1.5 text-sm transition ${tab === "mine" ? "bg-white font-medium text-slate-950 shadow-sm" : "text-slate-600 hover:bg-white/70"}`} onClick={() => setTab("mine")}>
               我的共享
-            </button>
-            <button className={`relative rounded-md px-3 py-1.5 text-sm transition ${tab === "devices" ? "bg-white font-medium text-slate-950 shadow-sm" : "text-slate-600 hover:bg-white/70"}`} onClick={() => setTab("devices")}>
-              设备连接
-              {inboundRequests.length + webAccessRequests.length > 0 ? <span className="absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full bg-red-500 ring-2 ring-white" /> : null}
             </button>
             {remoteUsers.map((user) => (
               <button key={user.user_id} className={`flex items-center gap-2 rounded-md px-3 py-1.5 text-sm transition ${tab === `remote:${user.user_id}` ? "bg-white font-medium text-slate-950 shadow-sm" : "text-slate-600 hover:bg-white/70"}`} onClick={() => setTab(`remote:${user.user_id}`)}>
@@ -2428,6 +2386,11 @@ export default function ShareFilesWindow() {
                 () => void handleUnshareLocal(item.id),
                 () => void revealLocalSharedFile(item.id),
                 localImageThumbnails[item.id],
+                undefined,
+                undefined,
+                undefined,
+                item.is_favorite === 1,
+                () => void handleToggleLocalFavorite(item.id),
               );
             })}
           </div>
@@ -2552,7 +2515,12 @@ export default function ShareFilesWindow() {
         </section>
       </div>
 
-      {renderTransferPanel()}
+      <TransferPanel
+        open={transferPanelOpen}
+        tasks={transferTasks}
+        activeCount={activeTransferTasks.length}
+        formatSize={formatSize}
+      />
 
       {dragActive ? (
         <div className="pointer-events-none fixed inset-0 z-40 flex items-center justify-center bg-black/20">

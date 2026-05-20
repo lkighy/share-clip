@@ -63,6 +63,7 @@ pub struct LocalSharedFileItem {
     pub created_at: i64,
     pub source_type: i32,
     pub source_clipboard_id: Option<String>,
+    pub is_favorite: i32,
     pub share_mode: i32,
 }
 
@@ -195,6 +196,7 @@ pub async fn list_local_shared_files(
     let db = &app.state::<crate::db::DbState>().conn;
     let rows = local_files::Entity::find()
         .filter(local_files::Column::IsValid.eq(1))
+        .order_by_desc(local_files::Column::IsFavorite)
         .order_by_desc(local_files::Column::CreatedAt)
         .all(db)
         .await
@@ -210,9 +212,31 @@ pub async fn list_local_shared_files(
             created_at: row.created_at,
             source_type: row.source_type,
             source_clipboard_id: row.source_clipboard_id,
+            is_favorite: row.is_favorite,
             share_mode: row.share_mode,
         })
         .collect())
+}
+
+#[tauri::command]
+pub async fn toggle_local_shared_file_favorite(
+    app: tauri::AppHandle,
+    id: String,
+) -> Result<bool, ApiError> {
+    let db = &app.state::<crate::db::DbState>().conn;
+    let row = local_files::Entity::find_by_id(id.clone())
+        .one(db)
+        .await
+        .map_err(AppError::from)?
+        .ok_or(AppError::NotFound)?;
+
+    let next_favorite = if row.is_favorite == 1 { 0 } else { 1 };
+    let mut am: local_files::ActiveModel = row.into();
+    am.is_favorite = Set(next_favorite);
+    am.update(db).await.map_err(AppError::from)?;
+
+    crate::app::events::emit_local_files_changed(&app, vec![id], "local_file_favorite_toggled");
+    Ok(next_favorite == 1)
 }
 
 #[tauri::command]

@@ -38,6 +38,7 @@ export type LocalSharedFileItem = {
   created_at: number;
   source_type: number;
   source_clipboard_id?: string | null;
+  is_favorite: number;
   share_mode: number;
 };
 
@@ -108,6 +109,10 @@ export function getLocalSharedFileThumbnail(id: string) {
 
 export function unshareLocalSharedFile(id: string) {
   return call<void>("unshare_local_shared_file", { id });
+}
+
+export function toggleLocalSharedFileFavorite(id: string) {
+  return call<boolean>("toggle_local_shared_file_favorite", { id });
 }
 
 export function addManualSharedPaths(paths: string[]) {

@@ -1,7 +1,10 @@
 #![allow(dead_code)]
 
 use log::{debug, warn};
-use sea_orm::{ActiveModelTrait, ColumnTrait, DbErr, EntityTrait, ModelTrait, QueryFilter, Set};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, DbErr, EntityTrait, ModelTrait, QueryFilter,
+    Set,
+};
 use uuid::Uuid;
 
 use crate::db::repository::clipboard_record;
@@ -27,7 +30,7 @@ pub async fn list_records(
     let page_size = page_size.clamp(1, 100);
     let offset = (page - 1) * page_size;
 
-    let rows = clipboard_record::list_latest(&db.conn, page_size, offset)
+    let rows = clipboard_record::list_latest_summaries(&db.conn, page_size, offset)
         .await
         .map_err(|e| {
             debug!("list_records failed: page={page}, page_size={page_size}, offset={offset}, error={e}");
@@ -35,10 +38,49 @@ pub async fn list_records(
         })?;
 
     let mut responses = Vec::with_capacity(rows.len());
-    for row in rows {
+    for summary in rows {
+        let row = model_from_summary_for_response(&db.conn, summary).await?;
         responses.push(clipboard_response_from_model_with_db(&db.conn, row).await?);
     }
     Ok(responses)
+}
+
+pub async fn list_shared_records(
+    conn: &DatabaseConnection,
+    page: u64,
+    page_size: u64,
+) -> Result<Vec<ClipboardResponse>, DbErr> {
+    let page = page.max(1);
+    let page_size = page_size.clamp(1, 100);
+    let offset = (page - 1) * page_size;
+
+    let rows = clipboard_record::list_shared_summaries(conn, page_size, offset)
+        .await
+        .map_err(|e| {
+            debug!("list_shared_records failed: page={page}, page_size={page_size}, offset={offset}, error={e}");
+            e
+        })?;
+
+    let mut responses = Vec::with_capacity(rows.len());
+    for summary in rows {
+        let row = model_from_summary_for_response(conn, summary).await?;
+        responses.push(clipboard_response_from_model_with_db(conn, row).await?);
+    }
+    Ok(responses)
+}
+
+async fn model_from_summary_for_response(
+    conn: &DatabaseConnection,
+    summary: clipboard_record::RecordSummary,
+) -> Result<Model, DbErr> {
+    let mut record = summary.into_model();
+    if record.r#type == ClipboardType::File as i32 || record.r#type == ClipboardType::Folder as i32
+    {
+        if let Some(full) = clipboard_record::select_by_id(conn, record.id).await? {
+            record.data = full.data;
+        }
+    }
+    Ok(record)
 }
 
 pub fn clipboard_response_from_model(record: Model) -> ClipboardResponse {
@@ -182,6 +224,7 @@ async fn handle_invalid_entry(
     let id = record.id;
     sync_local_files_on_clipboard_unshared_or_invalid(db, &record).await?;
     if auto_cleanup {
+        clipboard_formats::delete_payload_files(&db.conn, id).await?;
         record.delete(&db.conn).await.map_err(|e| {
             debug!("handle_invalid_entry delete failed: id={id}, auto_cleanup={auto_cleanup}, error={e}");
             AppError::from(e)
@@ -295,6 +338,7 @@ pub async fn delete_item(db: &DbState, id: i32, cache_dir: &str) -> Result<(), A
         }
     }
 
+    clipboard_formats::delete_payload_files(&db.conn, record.id).await?;
     sync_local_files_on_clipboard_unshared_or_invalid(db, &record).await?;
     record.delete(&db.conn).await.map_err(|e| {
         debug!("delete_item delete record failed: id={id}, error={e}");

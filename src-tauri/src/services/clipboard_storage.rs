@@ -34,29 +34,75 @@ pub async fn save_clipboard_item(
 
     let (type_code, data, preview, hash, size, formats) = match event {
         ClipboardChangeEvent::Text(content) => {
-            let data_bytes = content.into_bytes();
-            let preview =
-                preview_from_plain_text(&String::from_utf8_lossy(&data_bytes)).unwrap_or_default();
-            let size = data_bytes.len() as i64;
-            let hash = hash_bytes(&data_bytes);
-            (
-                i32::from(ClipboardType::Text),
-                Some(data_bytes),
-                Some(preview),
-                hash,
-                size,
-                None,
-            )
+            let size = content.len() as i64;
+            let hash = hash_bytes(content.as_bytes());
+            let preview = preview_from_plain_text(&content).unwrap_or_default();
+            if (content.len() as u64) > config.clipboard_text_max_bytes {
+                info!(
+                    "externalize oversized text clipboard: size={} bytes, inline_limit={} bytes",
+                    content.len(),
+                    config.clipboard_text_max_bytes
+                );
+                (
+                    i32::from(ClipboardType::Text),
+                    None,
+                    Some(preview),
+                    hash,
+                    size,
+                    Some(ClipboardFormats {
+                        text: Some(content),
+                        html: None,
+                        rtf: None,
+                    }),
+                )
+            } else {
+                (
+                    i32::from(ClipboardType::Text),
+                    Some(content.into_bytes()),
+                    Some(preview),
+                    hash,
+                    size,
+                    None,
+                )
+            }
         }
         ClipboardChangeEvent::RichText { text, html, rtf } => {
-            let formats = ClipboardFormats { text, html, rtf };
+            let raw_formats = ClipboardFormats { text, html, rtf };
+            let raw_size = raw_formats.total_size();
+            let Some(formats) = limit_formats_for_storage(raw_formats, &config) else {
+                info!(
+                    "skip oversized rich clipboard: size={} bytes, text_limit={} bytes, format_limit={} bytes, total_limit={} bytes",
+                    raw_size,
+                    config.clipboard_text_max_bytes,
+                    config.clipboard_rich_format_max_bytes,
+                    config.clipboard_total_max_bytes
+                );
+                return Ok(());
+            };
+            let stored_size = formats.total_size();
+            let primary_inline_limit = if formats.primary_type() == ClipboardType::Text {
+                config.clipboard_text_max_bytes
+            } else {
+                config.clipboard_rich_format_max_bytes
+            };
+            if stored_size < raw_size {
+                info!(
+                    "trim oversized rich clipboard: raw_size={} bytes, stored_size={} bytes",
+                    raw_size, stored_size
+                );
+            }
             let data_bytes = formats.primary_data();
             let preview = preview_from_plain_text(&formats.primary_text());
-            let size = formats.total_size();
+            let size = stored_size;
             let hash = formats.combined_hash();
+            let data = if (data_bytes.len() as u64) <= primary_inline_limit {
+                Some(data_bytes)
+            } else {
+                None
+            };
             (
                 i32::from(formats.primary_type()),
-                Some(data_bytes),
+                data,
                 preview,
                 hash,
                 size,
@@ -176,7 +222,15 @@ pub async fn save_clipboard_item(
         if inserted_new_record
             || !clipboard_formats::has_stored_formats(db, saved_record.id).await?
         {
-            clipboard_formats::save_formats(db, saved_record.id, formats).await?;
+            clipboard_formats::save_formats(
+                db,
+                saved_record.id,
+                formats,
+                &config.cache_dir,
+                config.clipboard_text_max_bytes,
+                config.clipboard_rich_format_max_bytes,
+            )
+            .await?;
         }
     }
 
@@ -298,6 +352,38 @@ fn now_ts() -> i64 {
         .unwrap_or(0)
 }
 
+fn limit_formats_for_storage(
+    mut formats: ClipboardFormats,
+    config: &crate::app::config::AppConfig,
+) -> Option<ClipboardFormats> {
+    while formats_total_size(&formats) > config.clipboard_total_max_bytes {
+        if formats.rtf.take().is_some() {
+            continue;
+        }
+        if formats.html.take().is_some() {
+            continue;
+        }
+        if formats.text.take().is_some() {
+            continue;
+        }
+        break;
+    }
+
+    if formats.is_empty() {
+        None
+    } else {
+        Some(formats)
+    }
+}
+
+fn option_len(value: &Option<String>) -> u64 {
+    value.as_ref().map(|value| value.len() as u64).unwrap_or(0)
+}
+
+fn formats_total_size(formats: &ClipboardFormats) -> u64 {
+    option_len(&formats.text) + option_len(&formats.html) + option_len(&formats.rtf)
+}
+
 fn build_files_preview(files: &[String]) -> String {
     let total = files.len();
     let display_count = if total > 3 { 2 } else { total };
@@ -338,16 +424,35 @@ fn build_files_preview(files: &[String]) -> String {
 }
 
 fn preview_from_plain_text(text: &str) -> Option<String> {
-    let mut lines = Vec::with_capacity(3);
-    for line in text.split('\n').take(3) {
-        lines.push(line.trim_end_matches('\r'));
+    let mut preview = String::new();
+    let mut char_count = 0usize;
+
+    for (line_index, line) in text.split('\n').take(3).enumerate() {
+        if line_index > 0 {
+            preview.push('\n');
+            char_count += 1;
+            if char_count >= 100 {
+                break;
+            }
+        }
+
+        for ch in line.trim_end_matches('\r').chars() {
+            preview.push(ch);
+            char_count += 1;
+            if char_count >= 100 {
+                break;
+            }
+        }
+
+        if char_count >= 100 {
+            break;
+        }
     }
 
-    let preview = lines.join("\n");
     if preview.trim().is_empty() {
         None
     } else {
-        Some(preview.chars().take(100).collect::<String>())
+        Some(preview)
     }
 }
 

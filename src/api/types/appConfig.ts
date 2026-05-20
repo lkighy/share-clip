@@ -7,6 +7,9 @@ export type AppConfig = {
   clipboard_window_spacing: number;
   share_files_view_mode: string;
   share_files_item_zoom: number;
+  clipboard_text_max_bytes: number;
+  clipboard_rich_format_max_bytes: number;
+  clipboard_total_max_bytes: number;
   auto_cleanup_invalid_clipboard_data: boolean;
   cache_dir: string;
   remote_cache_dir: string;

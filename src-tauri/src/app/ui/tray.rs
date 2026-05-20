@@ -1,5 +1,5 @@
 use crate::app::config::AppConfigStore;
-use crate::app::ui::window::open_or_create_window;
+use crate::app::ui::window::{open_or_create_window, open_or_create_window_with_url};
 use crate::models::window::WindowLabel;
 use log::error;
 use tauri::menu::{MenuBuilder, MenuItem, MenuItemBuilder};
@@ -118,7 +118,11 @@ pub fn init_menu(app: &App) {
                 }
             }
             "connect-device" => {
-                if let Err(e) = open_or_create_window(app, WindowLabel::ShareFile) {
+                if let Err(e) = open_or_create_window_with_url(
+                    app,
+                    WindowLabel::ShareFile,
+                    "shared-files?tab=devices",
+                ) {
                     error!("open shared files window for device tab failed: {e}");
                     return;
                 }

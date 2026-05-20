@@ -41,6 +41,15 @@ fn init_unix_clipboard_window(window: &tauri::Window) {
 }
 
 pub fn open_or_create_window(app: &tauri::AppHandle, label: WindowLabel) -> Result<(), String> {
+    let initial_url = label.url_params();
+    open_or_create_window_with_url(app, label, initial_url)
+}
+
+pub fn open_or_create_window_with_url(
+    app: &tauri::AppHandle,
+    label: WindowLabel,
+    initial_url: &str,
+) -> Result<(), String> {
     if let Some(window) = app.get_window(label.label()) {
         if let Ok(false) = window.is_visible() {
             window.show().map_err(|e| e.to_string())?;
@@ -59,7 +68,7 @@ pub fn open_or_create_window(app: &tauri::AppHandle, label: WindowLabel) -> Resu
     WebviewWindow::builder(
         app,
         label.label(),
-        WebviewUrl::App(label.url_params().into()),
+        WebviewUrl::App(initial_url.to_string().into()),
     )
     .title(label.title())
     .inner_size(980.0, 700.0)

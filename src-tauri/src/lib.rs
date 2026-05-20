@@ -135,6 +135,7 @@ pub fn run() {
             share_files_commands::reveal_local_shared_file,
             share_files_commands::get_local_shared_file_thumbnail,
             share_files_commands::unshare_local_shared_file,
+            share_files_commands::toggle_local_shared_file_favorite,
             share_files_commands::add_manual_shared_paths,
             share_files_commands::refresh_local_share_indexes,
             share_files_commands::get_remote_cache_status,

@@ -1,9 +1,12 @@
 use std::collections::BTreeMap;
+use std::fs;
+use std::path::PathBuf;
 
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, DbErr, EntityTrait, PaginatorTrait,
     QueryFilter, QueryOrder, QuerySelect, Set,
 };
+use serde::{Deserialize, Serialize};
 
 use crate::entity::{clipboard_record, clipboard_record_format};
 use crate::models::clipboard::ClipboardType;
@@ -12,6 +15,14 @@ use crate::utils::text::{html_to_plain_text, rtf_to_plain_text};
 pub const FORMAT_TEXT: &str = "text/plain";
 pub const FORMAT_HTML: &str = "text/html";
 pub const FORMAT_RTF: &str = "text/rtf";
+const PAYLOAD_REF_PREFIX: &[u8] = b"share-clip:payload-file:v1\n";
+
+#[derive(Debug, Serialize, Deserialize)]
+struct PayloadRef {
+    path: String,
+    size: usize,
+    hash: String,
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct ClipboardFormats {
@@ -126,16 +137,25 @@ pub async fn save_formats(
     db: &DatabaseConnection,
     clipboard_id: i32,
     formats: &ClipboardFormats,
+    cache_dir: &str,
+    text_inline_max_bytes: u64,
+    rich_inline_max_bytes: u64,
 ) -> Result<(), DbErr> {
     let now = chrono::Utc::now().timestamp();
     for (format, value, priority) in formats.ordered_entries() {
-        let data = value.as_bytes().to_vec();
+        let content = value.as_bytes();
+        let inline_max_bytes = if format == FORMAT_TEXT {
+            text_inline_max_bytes
+        } else {
+            rich_inline_max_bytes
+        };
+        let data = format_storage_data(cache_dir, clipboard_id, format, value, inline_max_bytes)?;
         let active = clipboard_record_format::ActiveModel {
             clipboard_id: Set(clipboard_id),
             format: Set(format.to_string()),
             format_name: Set(Some(format.to_string())),
-            hash: Set(Some(hash_bytes(&data))),
-            size: Set(Some(data.len() as i64)),
+            hash: Set(Some(hash_bytes(content))),
+            size: Set(Some(content.len() as i64)),
             priority: Set(priority),
             created_at: Set(now),
             data: Set(data),
@@ -162,7 +182,7 @@ pub async fn load_formats(
 
     let mut map = BTreeMap::new();
     for row in rows {
-        if let Ok(value) = String::from_utf8(row.data) {
+        if let Ok(value) = load_format_data(row.data) {
             map.insert(row.format, value);
         }
     }
@@ -196,6 +216,21 @@ pub async fn list_format_names(
         .await
 }
 
+pub async fn delete_payload_files(db: &DatabaseConnection, clipboard_id: i32) -> Result<(), DbErr> {
+    let rows = clipboard_record_format::Entity::find()
+        .filter(clipboard_record_format::Column::ClipboardId.eq(clipboard_id))
+        .all(db)
+        .await?;
+
+    for row in rows {
+        if let Some(payload) = payload_ref_from_data(&row.data) {
+            let _ = fs::remove_file(payload.path);
+        }
+    }
+
+    Ok(())
+}
+
 pub fn legacy_format_name(record_type: i32) -> Option<String> {
     if record_type == ClipboardType::Text as i32 {
         Some(FORMAT_TEXT.to_string())
@@ -217,4 +252,82 @@ fn update_hash(hash: &mut blake3::Hasher, format: &str, data: &[u8]) {
 
 fn hash_bytes(bytes: &[u8]) -> String {
     blake3::hash(bytes).to_hex().to_string()
+}
+
+fn format_storage_data(
+    cache_dir: &str,
+    clipboard_id: i32,
+    format: &str,
+    value: &str,
+    inline_max_bytes: u64,
+) -> Result<Vec<u8>, DbErr> {
+    let bytes = value.as_bytes();
+    if (bytes.len() as u64) <= inline_max_bytes {
+        return Ok(bytes.to_vec());
+    }
+
+    let dir = resolve_payload_cache_dir(cache_dir);
+    fs::create_dir_all(&dir)
+        .map_err(|err| DbErr::Custom(format!("create clipboard payload dir failed: {err}")))?;
+
+    let hash = hash_bytes(bytes);
+    let extension = extension_for_format(format);
+    let file_path = dir.join(format!("{}-{}.{extension}", clipboard_id, &hash[..16]));
+    if !file_path.exists() {
+        fs::write(&file_path, bytes)
+            .map_err(|err| DbErr::Custom(format!("write clipboard payload failed: {err}")))?;
+    }
+
+    let payload = PayloadRef {
+        path: file_path.to_string_lossy().into_owned(),
+        size: bytes.len(),
+        hash,
+    };
+    let mut data = PAYLOAD_REF_PREFIX.to_vec();
+    data.extend(
+        serde_json::to_vec(&payload)
+            .map_err(|err| DbErr::Custom(format!("encode clipboard payload ref failed: {err}")))?,
+    );
+    Ok(data)
+}
+
+fn load_format_data(data: Vec<u8>) -> Result<String, DbErr> {
+    if let Some(payload) = payload_ref_from_data(&data) {
+        let bytes = fs::read(&payload.path)
+            .map_err(|err| DbErr::Custom(format!("read clipboard payload failed: {err}")))?;
+        return String::from_utf8(bytes)
+            .map_err(|err| DbErr::Custom(format!("invalid clipboard payload utf8: {err}")));
+    }
+
+    String::from_utf8(data)
+        .map_err(|err| DbErr::Custom(format!("invalid clipboard format utf8: {err}")))
+}
+
+fn payload_ref_from_data(data: &[u8]) -> Option<PayloadRef> {
+    data.strip_prefix(PAYLOAD_REF_PREFIX)
+        .and_then(|json| serde_json::from_slice::<PayloadRef>(json).ok())
+}
+
+fn extension_for_format(format: &str) -> &'static str {
+    match format {
+        FORMAT_HTML => "html",
+        FORMAT_RTF => "rtf",
+        _ => "txt",
+    }
+}
+
+fn resolve_payload_cache_dir(cache_dir: &str) -> PathBuf {
+    let cache_path = PathBuf::from(cache_dir);
+    let base = if cache_path.is_absolute() {
+        cache_path
+    } else if let Ok(exe_path) = std::env::current_exe() {
+        exe_path
+            .parent()
+            .map(|base_dir| base_dir.join(&cache_path))
+            .unwrap_or(cache_path)
+    } else {
+        cache_path
+    };
+
+    base.join("clipboard-payloads")
 }
