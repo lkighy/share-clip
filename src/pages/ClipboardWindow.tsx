@@ -21,6 +21,7 @@ import {
   removeItem,
 } from "@/service/clipboardRecordService.ts";
 import { operationWindow } from "@/api/window.ts";
+import { startWindowDrag } from "@/lib/windowDrag";
 import { listRemoteShareUsers, type RemoteShareUser } from "@/api/shareFiles";
 import { getLocalDeviceInfo, type LocalDeviceInfo } from "@/api/appConfig";
 import { copyRemoteClipboardContent, pasteRemoteClipboardContent, type RemoteClipboardContent } from "@/api/clipboard";
@@ -717,31 +718,17 @@ function ClipboardWindow() {
     };
   }, []);
 
-  const handleTitleBarMouseDown = async (e: React.MouseEvent<HTMLElement>) => {
-    if (e.button !== 0) {
-      return;
-    }
-
-    const target = e.target as HTMLElement;
-    if (target.closest("button,a,input,textarea,select,[data-no-drag='true']")) {
-      return;
-    }
-
-    await getCurrentWindow().startDragging();
-  };
-
   return (
     <main className="fluent-shell flex h-screen w-full flex-col overflow-hidden" onContextMenu={(e) => e.preventDefault()}>
       <Toaster />
       <header
         className="fluent-titlebar"
-        data-tauri-drag-region
-        onMouseDown={handleTitleBarMouseDown}
+        onMouseDown={(event) => void startWindowDrag(event)}
       >
         <Button variant="ghost" size="icon" className="h-8 w-8 rounded-md hover:bg-slate-200/70" data-no-drag="true" onClick={() => void handleRefreshClick()}>
           <RefreshCcw size={16} data-no-drag="true" />
         </Button>
-        <div className="select-none text-center" data-tauri-drag-region>
+        <div className="select-none text-center">
           <h1 className="text-sm font-semibold text-slate-950">剪切板</h1>
           <p className="text-[11px] text-slate-500">{sourceLabel} / {data.length} 条记录</p>
         </div>

@@ -1,6 +1,5 @@
 import type { MouseEvent } from "react";
-import { useEffect, useMemo, useState } from "react";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { listen } from "@tauri-apps/api/event";
 import { toast } from "sonner";
@@ -33,10 +32,12 @@ import { Toaster } from "@/components/ui/sonner";
 import { Button } from "@/components/ui/button";
 import { TransferPanel, type TransferChildTask, type TransferTask, type TransferTaskKind, type TransferTaskStatus } from "@/components/share-files/TransferPanel";
 import { operationWindow } from "@/api/window";
+import { startWindowDrag } from "@/lib/windowDrag";
 import { getLocalDeviceInfo, type LocalDeviceInfo } from "@/api/appConfig";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { formatDisplayPath } from "@/lib/utils";
 import { loadAppConfig, saveAppConfig, useAppConfigStore } from "@/store/appConfigStore";
+import { scanLanShareDevices, type LanDiscoveredDevice } from "@/api/appConfig";
 import {
   addManualSharedPaths,
   cacheRemoteSharedFile,
@@ -168,7 +169,7 @@ type TransferProgress = {
   progress: number;
 };
 
-type ConnectionDialogMode = "add" | "edit" | "reauth";
+type ConnectionDialogMode = "add" | "edit" | "reauth" | "lan";
 
 function initialTabFromLocation(): TabKey {
   return new URLSearchParams(window.location.search).get("tab") === "devices" ? "devices" : "mine";
@@ -484,22 +485,6 @@ async function blobToBase64(blob: Blob) {
   });
 }
 
-async function downloadRemoteFile(
-  baseUrl: string,
-  shareId: string,
-  node: RemoteFileNode,
-  auth: RemoteAuthHeaders,
-  onProgress?: (progress: TransferProgress) => void,
-) {
-  const blob = await fetchRemoteFileBlob(baseUrl, shareId, node.relative_path, auth, onProgress);
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = node.name || "download.bin";
-  anchor.click();
-  URL.revokeObjectURL(url);
-}
-
 function cachedItemToRemoteShare(item: RemoteCachedFileItem, remoteDeleted: boolean): RemoteShareItem {
   return {
     id: item.share_id,
@@ -571,11 +556,17 @@ export default function ShareFilesWindow() {
   const [addConnectionMessage, setAddConnectionMessage] = useState("");
   const [newUserUrl, setNewUserUrl] = useState("http://127.0.0.1:24800");
   const [newUserPassword, setNewUserPassword] = useState("");
+  const [lanDialogDevice, setLanDialogDevice] = useState<LanDiscoveredDevice | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [dragActive, setDragActive] = useState(false);
   const [transferTasks, setTransferTasks] = useState<TransferTask[]>([]);
   const [transferPanelOpen, setTransferPanelOpen] = useState(false);
   const [checkingRemoteUserId, setCheckingRemoteUserId] = useState<string | null>(null);
+  const [lanDevices, setLanDevices] = useState<LanDiscoveredDevice[]>([]);
+  const [lanScanning, setLanScanning] = useState(false);
+  const [connectingLanDeviceId, setConnectingLanDeviceId] = useState<string | null>(null);
+  const activeTransferItemKeysRef = useRef(new Set<string>());
+  const transferTaskItemKeyByIdRef = useRef(new Map<string, string>());
   const activeRemote = useMemo(
     () => (tab.startsWith("remote:") ? remoteUsers.find((u) => `remote:${u.user_id}` === tab) : null),
     [remoteUsers, tab],
@@ -691,8 +682,14 @@ export default function ShareFilesWindow() {
   const createTransferTask = (target: RemoteContextTarget, kind: TransferTaskKind) => {
     if (!activeRemote) return null;
     const itemKey = remoteTransferItemKey(activeRemote.user_id, target.shareId, target.relativePath);
+    if (activeTransferItemKeysRef.current.has(itemKey)) {
+      toast.info("该文件正在下载/同步中");
+      return null;
+    }
+    activeTransferItemKeysRef.current.add(itemKey);
     const now = Date.now();
     const id = `${kind}:${itemKey}:${now}`;
+    transferTaskItemKeyByIdRef.current.set(id, itemKey);
     const task: TransferTask = {
       id,
       itemKey,
@@ -732,6 +729,11 @@ export default function ShareFilesWindow() {
   };
 
   const finishTransferTask = (id: string, status: Extract<TransferTaskStatus, "done" | "error">, message?: string) => {
+    const itemKey = transferTaskItemKeyByIdRef.current.get(id);
+    if (itemKey) {
+      activeTransferItemKeysRef.current.delete(itemKey);
+      transferTaskItemKeyByIdRef.current.delete(id);
+    }
     updateTransferTask(id, {
       status,
       progress: status === "done" ? 100 : undefined,
@@ -773,8 +775,46 @@ export default function ShareFilesWindow() {
     );
   };
 
+  const markRemoteTargetCached = (target: RemoteContextTarget, localCachePath: string) => {
+    const relativePath = normalizeRemoteTaskPath(target.relativePath);
+    const patch = {
+      local_cache_path: localCachePath,
+      cached: true,
+      remote_deleted: false,
+    };
+    setRemoteShares((prev) =>
+      prev.map((share) =>
+        share.id === target.shareId && normalizeRemoteTaskPath(share.relative_path ?? ".") === relativePath
+          ? { ...share, ...patch }
+          : share,
+      ),
+    );
+    setRemoteItems((prev) =>
+      prev.map((item) =>
+        target.shareId === activeRemoteShareId && normalizeRemoteTaskPath(item.relative_path) === relativePath
+          ? { ...item, ...patch }
+          : item,
+      ),
+    );
+    setContextMenu((prev) =>
+      prev?.type === "remote" &&
+      prev.remote?.shareId === target.shareId &&
+      normalizeRemoteTaskPath(prev.remote.relativePath) === relativePath
+        ? {
+            ...prev,
+            remote: {
+              ...prev.remote,
+              localCachePath,
+              cached: true,
+              remoteDeleted: false,
+            },
+          }
+        : prev,
+    );
+  };
+
   const downloadRemoteTarget = async (target: RemoteContextTarget) => {
-    if (!activeRemoteAuth || !activeRemoteBaseUrl) return;
+    if (!activeRemote || !activeRemoteAuth || !activeRemoteBaseUrl) return;
 
     if (target.isDir) {
       const synced = await syncRemoteTarget(target);
@@ -793,15 +833,10 @@ export default function ShareFilesWindow() {
 
     try {
       updateTransferTask(task.id, { status: "running", message: "下载中" });
-      await downloadRemoteFile(
+      const blob = await fetchRemoteFileBlob(
         activeRemoteBaseUrl,
         target.shareId,
-        {
-          name: target.name,
-          relative_path: target.relativePath,
-          is_dir: false,
-          size: target.size ?? undefined,
-        },
+        target.relativePath,
         activeRemoteAuth,
         ({ loaded, total, progress }) => {
           updateTransferTask(task.id, {
@@ -811,10 +846,27 @@ export default function ShareFilesWindow() {
           });
         },
       );
+      updateTransferTask(task.id, { message: "保存到缓存" });
+      const dataBase64 = await blobToBase64(blob);
+      const localCachePath = await cacheRemoteSharedFile({
+        remote_user_id: activeRemote.user_id,
+        share_id: target.shareId,
+        share_name: target.shareName,
+        relative_path: normalizeRemoteTaskPath(target.relativePath),
+        name: target.name,
+        is_dir: false,
+        size: target.size ?? blob.size,
+        mtime: target.mtime ?? null,
+        hash: target.hash ?? null,
+        data_base64: dataBase64,
+      });
+      markRemoteTargetCached(target, localCachePath);
       finishTransferTask(task.id, "done", "已完成");
+      toast.success(`已下载 ${target.name}`);
     } catch (error) {
       console.error(error);
       if (activeRemote && isRemoteAuthError(error)) {
+        finishTransferTask(task.id, "error", remoteAuthPromptMessage(error));
         await promptRemoteReauth(activeRemote, error);
         return;
       }
@@ -890,12 +942,16 @@ export default function ShareFilesWindow() {
             total: size ?? cacheStatus.size ?? null,
             progress: 100,
           });
-          return { bytes: size ?? cacheStatus.size ?? 0, cached: true };
+          return {
+            bytes: size ?? cacheStatus.size ?? 0,
+            cached: true,
+            localCachePath: cacheStatus.local_cache_path ?? null,
+          };
         }
 
         const blob = await fetchRemoteFileBlob(activeRemoteBaseUrl, target.shareId, relativePath, activeRemoteAuth, onProgress);
         const dataBase64 = await blobToBase64(blob);
-        await cacheRemoteSharedFile({
+        const localCachePath = await cacheRemoteSharedFile({
           remote_user_id: activeRemote.user_id,
           share_id: target.shareId,
           share_name: target.shareName,
@@ -907,7 +963,7 @@ export default function ShareFilesWindow() {
           hash,
           data_base64: dataBase64,
         });
-        return { bytes: blob.size, cached: false };
+        return { bytes: blob.size, cached: false, localCachePath };
       };
 
       if (!target.isDir) {
@@ -939,6 +995,20 @@ export default function ShareFilesWindow() {
           progress: 100,
           message: result.cached ? "已缓存" : "已完成",
         });
+        if (result.localCachePath) {
+          markRemoteTargetCached(
+            {
+              ...target,
+              relativePath: normalizeRemoteTaskPath(fileMeta.relativePath),
+              name: fileMeta.name,
+              isDir: false,
+              size: fileMeta.size ?? null,
+              mtime: fileMeta.mtime ?? null,
+              hash: fileMeta.hash ?? null,
+            },
+            result.localCachePath,
+          );
+        }
         finishTransferTask(task.id, "done", "已完成");
         toast.success(result.cached ? `已使用本地缓存 ${target.name}` : `已同步文件 ${target.name}`);
         return true;
@@ -1327,10 +1397,12 @@ export default function ShareFilesWindow() {
     mode: ConnectionDialogMode,
     user?: RemoteShareUser | null,
     message?: string,
+    lanDevice?: LanDiscoveredDevice | null,
   ) => {
     setConnectionDialogMode(mode);
     setEditingRemoteUser(user ?? null);
-    setNewUserUrl(user ? normalizeBaseUrl(user.ip) : "http://127.0.0.1:24800");
+    setLanDialogDevice(lanDevice ?? null);
+    setNewUserUrl(user ? normalizeBaseUrl(user.ip) : lanDevice ? normalizeBaseUrl(lanDevice.base_url) : "http://127.0.0.1:24800");
     setNewUserPassword(user?.password ?? "");
     setAddConnectionStatus(mode === "reauth" ? AUTH_STATUS.unauthenticated : null);
     setAddConnectionMessage(message ?? "");
@@ -1355,6 +1427,10 @@ export default function ShareFilesWindow() {
     }
     openConnectionDialog("reauth", user, message);
     toast.error(message);
+  };
+
+  const openLanPasswordDialog = (device: LanDiscoveredDevice, message?: string) => {
+    openConnectionDialog("lan", null, message ?? "该设备需要访问密码，请输入后继续连接。", device);
   };
 
   const verifyRemoteConnection = async (
@@ -1561,9 +1637,137 @@ export default function ShareFilesWindow() {
     }
   };
 
+  const handleScanLanDevices = async () => {
+    if (lanScanning) return;
+    setLanScanning(true);
+    try {
+      const devices = await scanLanShareDevices();
+      setLanDevices(devices);
+      if (devices.length === 0) {
+        toast.info("未扫描到可连接设备");
+      } else {
+        toast.success(`扫描到 ${devices.length} 台设备`);
+      }
+    } catch (error) {
+      console.error(error);
+      const message = error instanceof Error ? error.message : "扫描局域网失败";
+      toast.error(message);
+    } finally {
+      setLanScanning(false);
+    }
+  };
+
+  const handleConnectLanDevice = async (device: LanDiscoveredDevice, passwordOverride?: string | null) => {
+    if (connectingLanDeviceId) return;
+    const password = passwordOverride?.trim() ?? "";
+    if (device.password_required && !password) {
+      if (passwordOverride !== undefined) {
+        setAddConnectionStatus(AUTH_STATUS.unauthenticated);
+        setAddConnectionMessage("请输入访问密码");
+        toast.error("请输入访问密码");
+        return;
+      }
+      openLanPasswordDialog(device);
+      return;
+    }
+
+    setConnectingLanDeviceId(device.device_id);
+    setAddConnectionStatus(AUTH_STATUS.pending);
+    setAddConnectionMessage("正在发送连接申请...");
+    try {
+      if (!localDevice) {
+        throw new Error("本机设备身份尚未初始化");
+      }
+      const initial = await requestRemoteConnection(device.base_url, {
+        user_id: localDevice.device_id,
+        user_name: localDevice.device_name,
+        device_id: localDevice.device_id,
+        password: password || null,
+      });
+      if (initial.device_id !== device.device_id) {
+        throw new Error("扫描结果与远端响应的设备 ID 不一致");
+      }
+      let saved = await upsertRemoteShareUser({
+        user_id: initial.device_id,
+        user_name: initial.device_name || device.device_name,
+        ip: device.base_url,
+        password: password || null,
+        device_id: initial.device_id,
+      });
+      saved = await updateRemoteShareUserAuthStatus({
+        user_id: saved.user_id,
+        auth_status: initial.auth_status,
+        auth_token: initial.auth_token ?? null,
+      });
+      replaceRemoteUser(saved);
+      setTab(`remote:${saved.user_id}`);
+
+      if (initial.auth_status === AUTH_STATUS.approved) {
+        toast.success("远程连接已通过");
+        resetAddUserDialog();
+        return;
+      }
+      if (initial.auth_status === AUTH_STATUS.rejected) {
+        setAddConnectionStatus(AUTH_STATUS.rejected);
+        setAddConnectionMessage("对方已拒绝连接");
+        toast.error("对方已拒绝连接");
+        return;
+      }
+
+      setAddConnectionStatus(AUTH_STATUS.pending);
+      setAddConnectionMessage("已发送申请，正在等待对方同意...");
+      toast.info("已发送申请，正在等待对方同意...");
+      const approved = await waitForRemoteApproval(device.base_url, localDevice.device_id);
+      const latest = await updateRemoteShareUserAuthStatus({
+        user_id: saved.user_id,
+        auth_status: approved.auth_status,
+        auth_token: approved.auth_token ?? null,
+      });
+      replaceRemoteUser(latest);
+      if (approved.auth_status === AUTH_STATUS.approved) {
+        toast.success("远程连接已通过");
+        resetAddUserDialog();
+      } else if (approved.auth_status === AUTH_STATUS.timeout) {
+        setAddConnectionStatus(AUTH_STATUS.timeout);
+        setAddConnectionMessage("等待对方同意超时");
+        toast.error("等待对方同意超时");
+      } else {
+        setAddConnectionStatus(approved.auth_status);
+        setAddConnectionMessage(approved.message || authStatusLabel(approved.auth_status));
+        toast.error(authStatusLabel(approved.auth_status));
+      }
+    } catch (error) {
+      console.error(error);
+      const message = isRemoteAuthError(error)
+        ? "密码无效或远端要求访问密码，请重新输入。"
+        : error instanceof Error
+          ? error.message
+          : "连接设备失败";
+      setAddConnectionStatus(AUTH_STATUS.unauthenticated);
+      setAddConnectionMessage(message);
+      if (isRemoteAuthError(error) || device.password_required) {
+        setLanDialogDevice(device);
+        setConnectionDialogMode("lan");
+        setNewUserUrl(normalizeBaseUrl(device.base_url));
+        setAddDialogOpen(true);
+      }
+      toast.error(message);
+    } finally {
+      setConnectingLanDeviceId(null);
+    }
+  };
+
   const handleConnectionDialogSubmit = async () => {
     if (connectionDialogMode === "add") {
       await handleAddUser();
+      return;
+    }
+    if (connectionDialogMode === "lan") {
+      if (!lanDialogDevice) {
+        toast.error("扫描设备信息已失效，请重新扫描");
+        return;
+      }
+      await handleConnectLanDevice(lanDialogDevice, newUserPassword);
       return;
     }
     await handleUpdateRemoteUserConnection();
@@ -1589,6 +1793,7 @@ export default function ShareFilesWindow() {
     setAddDialogOpen(false);
     setConnectionDialogMode("add");
     setEditingRemoteUser(null);
+    setLanDialogDevice(null);
     setAddConnectionStatus(null);
     setAddConnectionMessage("");
     setNewUserUrl("http://127.0.0.1:24800");
@@ -1901,13 +2106,6 @@ export default function ShareFilesWindow() {
     };
   }, []);
 
-  const handleTitleBarMouseDown = async (e: MouseEvent<HTMLElement>) => {
-    if (e.button !== 0) return;
-    const target = e.target as HTMLElement;
-    if (target.closest("button,a,input,textarea,select,[data-no-drag='true']")) return;
-    await getCurrentWindow().startDragging();
-  };
-
   const renderGridItem = (
     key: string,
     name: string,
@@ -1950,6 +2148,7 @@ export default function ShareFilesWindow() {
     const progressBaseClassName = hasProgress ? "relative overflow-hidden bg-white/80" : "";
     const remoteDeletedClassName = remoteDeleted ? "border-slate-200 bg-slate-100/70 text-slate-500 opacity-75" : "";
     const contentLayerClassName = hasProgress ? "relative z-10" : "";
+    const primaryActionLabel = hasProgress ? "进行中" : actionLabel;
     const renderVisual = (boxSize: number, iconBoxSize: number) => (
       <span
         className="flex shrink-0 items-center justify-center overflow-hidden rounded-md bg-slate-100/80"
@@ -2002,18 +2201,18 @@ export default function ShareFilesWindow() {
                 <Star size={14} className={isFavorite ? "fill-yellow-500 text-yellow-500" : "text-slate-500"} />
               </Button>
             ) : null}
-            {actionLabel && onAction ? (
-              <Button size="sm" variant="outline" onClick={onAction}>
-                {actionLabel === "下载" ? <Download size={13} className="mr-1" /> : actionLabel === "打开" ? <FolderOpen size={13} className="mr-1" /> : actionLabel === "同步" ? <RefreshCcw size={13} className="mr-1" /> : null}
-                {actionLabel}
+            {primaryActionLabel && onAction ? (
+              <Button size="sm" variant="outline" disabled={hasProgress} onClick={onAction}>
+                {primaryActionLabel === "下载" ? <Download size={13} className="mr-1" /> : primaryActionLabel === "打开" ? <FolderOpen size={13} className="mr-1" /> : primaryActionLabel === "同步" || primaryActionLabel === "进行中" ? <RefreshCcw size={13} className="mr-1" /> : null}
+                {primaryActionLabel}
               </Button>
             ) : isDir ? (
               <Button size="sm" variant="outline" onClick={onOpen}>打开</Button>
             ) : (
-              <Button size="sm" variant="outline" onClick={onDownload}><Download size={13} className="mr-1" />下载</Button>
+              <Button size="sm" variant="outline" disabled={hasProgress} onClick={onDownload}><Download size={13} className="mr-1" />{hasProgress ? "进行中" : "下载"}</Button>
             )}
             {secondaryActionLabel && onSecondaryAction ? (
-              <Button size="sm" variant="outline" onClick={onSecondaryAction}>
+              <Button size="sm" variant="outline" disabled={hasProgress} onClick={onSecondaryAction}>
                 {secondaryActionLabel === "同步" ? <RefreshCcw size={13} className="mr-1" /> : secondaryActionLabel === "打开" ? <FolderOpen size={13} className="mr-1" /> : null}
                 {secondaryActionLabel}
               </Button>
@@ -2097,11 +2296,47 @@ export default function ShareFilesWindow() {
         <section className="rounded-lg border border-slate-200 bg-white/75 p-3">
           <div className="mb-3 flex items-center justify-between gap-2">
             <h2 className="text-sm font-semibold text-slate-900">我连接的设备</h2>
-            <Button size="sm" onClick={openAddDeviceDialog}>
-              <Plus size={14} className="mr-1" />
-              添加/配对设备
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button size="sm" variant="outline" disabled={lanScanning} onClick={() => void handleScanLanDevices()}>
+                <RefreshCcw size={14} className="mr-1" />
+                {lanScanning ? "扫描中" : "扫描局域网"}
+              </Button>
+              <Button size="sm" onClick={openAddDeviceDialog}>
+                <Plus size={14} className="mr-1" />
+                添加/配对设备
+              </Button>
+            </div>
           </div>
+          {lanDevices.length > 0 ? (
+            <div className="mb-3 space-y-2 rounded-lg border border-sky-100 bg-sky-50/60 p-2">
+              <div className="text-xs font-medium text-sky-700">扫描到的设备</div>
+              {lanDevices.map((device) => {
+                const connected = remoteUsers.some((user) => user.user_id === device.device_id);
+                const connecting = connectingLanDeviceId === device.device_id;
+                return (
+                  <div key={device.device_id} className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-white/85 px-3 py-2 ring-1 ring-sky-100">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="truncate text-sm font-medium text-slate-800">{device.device_name}</span>
+                        {device.password_required ? <span className="rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] text-amber-700 ring-1 ring-amber-100">需要密码</span> : null}
+                        {!device.sync_access_enabled ? <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500 ring-1 ring-slate-200">同步关闭</span> : null}
+                      </div>
+                      <div className="mt-1 truncate text-xs text-slate-500">{device.base_url}</div>
+                      <div className="mt-1 max-w-[520px] truncate font-mono text-[11px] text-slate-400">{device.device_id}</div>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant={connected ? "outline" : "default"}
+                      disabled={connecting || !device.sync_access_enabled}
+                      onClick={() => void handleConnectLanDevice(device)}
+                    >
+                      {connecting ? "连接中" : connected ? "重新连接" : "连接"}
+                    </Button>
+                  </div>
+                );
+              })}
+            </div>
+          ) : null}
           {remoteUsers.length === 0 ? (
             <p className="rounded-md bg-slate-50 px-3 py-2 text-sm text-slate-500">暂无已添加设备</p>
           ) : (
@@ -2230,7 +2465,7 @@ export default function ShareFilesWindow() {
     >
       <Toaster />
 
-      <header className="fluent-titlebar" data-tauri-drag-region onMouseDown={handleTitleBarMouseDown}>
+      <header className="fluent-titlebar" onMouseDown={(event) => void startWindowDrag(event)}>
         <div className="flex min-w-0 items-center gap-2">
           <div className="rounded-md bg-sky-100 p-1.5 text-sky-700">
             <Server size={17} />
@@ -2569,7 +2804,13 @@ export default function ShareFilesWindow() {
             <>
               {!contextMenu.remote.remoteDeleted ? (
                 <button
-                  className="flex w-full items-center gap-2 rounded px-3 py-1.5 text-left text-sm text-slate-700 hover:bg-slate-100"
+                  className="flex w-full items-center gap-2 rounded px-3 py-1.5 text-left text-sm text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={
+                    Boolean(
+                      activeRemote &&
+                        transferProgressByItem.has(remoteTransferItemKey(activeRemote.user_id, contextMenu.remote.shareId, contextMenu.remote.relativePath)),
+                    )
+                  }
                   onClick={() => {
                     const target = contextMenu.remote;
                     setContextMenu(null);
@@ -2583,7 +2824,13 @@ export default function ShareFilesWindow() {
               ) : null}
               {!contextMenu.remote.remoteDeleted ? (
                 <button
-                  className="flex w-full items-center gap-2 rounded px-3 py-1.5 text-left text-sm text-slate-700 hover:bg-slate-100"
+                  className="flex w-full items-center gap-2 rounded px-3 py-1.5 text-left text-sm text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={
+                    Boolean(
+                      activeRemote &&
+                        transferProgressByItem.has(remoteTransferItemKey(activeRemote.user_id, contextMenu.remote.shareId, contextMenu.remote.relativePath)),
+                    )
+                  }
                   onClick={() => {
                     const target = contextMenu.remote;
                     setContextMenu(null);
@@ -2610,7 +2857,7 @@ export default function ShareFilesWindow() {
                   }}
                 >
                   <FolderOpen size={14} />
-                  打开缓存位置
+                  打开文件所在位置
                 </button>
               ) : null}
               {contextMenu.remote.localCachePath ? (
@@ -2654,18 +2901,26 @@ export default function ShareFilesWindow() {
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{connectionDialogMode === "add" ? "连接设备" : connectionDialogMode === "edit" ? "编辑连接" : "重新认证"}</DialogTitle>
+            <DialogTitle>{connectionDialogMode === "add" || connectionDialogMode === "lan" ? "连接设备" : connectionDialogMode === "edit" ? "编辑连接" : "重新认证"}</DialogTitle>
             <DialogDescription>
               {connectionDialogMode === "add"
                 ? "填写远程访问地址和密码；设备名称与 ID 会在对方响应后自动保存。"
-                : connectionDialogMode === "edit"
-                  ? "修改远程访问地址或密码，保存后会重新验证连接。"
-                  : "连接可能已失效，请更新远程地址或密码后重新验证。"}
+                : connectionDialogMode === "lan"
+                  ? `${lanDialogDevice?.device_name ?? "扫描到的设备"} 需要访问密码，输入后继续连接。`
+                  : connectionDialogMode === "edit"
+                    ? "修改远程访问地址或密码，保存后会重新验证连接。"
+                    : "连接可能已失效，请更新远程地址或密码后重新验证。"}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-2">
-            <input className="fluent-input" placeholder="http://192.168.1.10:24800" value={newUserUrl} onChange={(e) => setNewUserUrl(e.target.value)} />
+            <input className="fluent-input" placeholder="http://192.168.1.10:24800" value={newUserUrl} onChange={(e) => setNewUserUrl(e.target.value)} disabled={connectionDialogMode === "lan"} />
             <input className="fluent-input" type="password" placeholder="访问密码（对方启用时必填）" value={newUserPassword} onChange={(e) => setNewUserPassword(e.target.value)} />
+            {connectionDialogMode === "lan" && lanDialogDevice ? (
+              <div className="rounded-md border border-sky-100 bg-sky-50 px-3 py-2 text-[11px] text-slate-600">
+                <div className="font-medium text-slate-800">{lanDialogDevice.device_name}</div>
+                <div className="mt-1 font-mono text-slate-500">{lanDialogDevice.device_id}</div>
+              </div>
+            ) : null}
             {localDevice ? (
               <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-500">
                 将以本机身份 {localDevice.device_name}（{localDevice.device_id}）向对方申请连接。
@@ -2682,9 +2937,11 @@ export default function ShareFilesWindow() {
                   ? "等待确认..."
                   : connectionDialogMode === "add"
                     ? "发送连接申请"
-                    : connectionDialogMode === "edit"
-                      ? "保存并验证"
-                      : "重新验证"}
+                    : connectionDialogMode === "lan"
+                      ? "继续连接"
+                      : connectionDialogMode === "edit"
+                        ? "保存并验证"
+                        : "重新验证"}
               </Button>
             </div>
           </div>

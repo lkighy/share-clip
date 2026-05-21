@@ -27,6 +27,7 @@ export type AppConfig = {
   share_server_password_enabled: boolean;
   share_server_password_hash: string | null;
   share_server_auth_mode: number;
+  lan_discovery_enabled: boolean;
   browser_access_enabled: boolean;
   web_access_auth_required: boolean;
   web_access_password_enabled: boolean;

@@ -51,10 +51,7 @@ pub fn open_or_create_window_with_url(
     initial_url: &str,
 ) -> Result<(), String> {
     if let Some(window) = app.get_window(label.label()) {
-        if let Ok(false) = window.is_visible() {
-            window.show().map_err(|e| e.to_string())?;
-        }
-        window.set_focus().map_err(|e| e.to_string())?;
+        focus_existing_window(&window)?;
         return Ok(());
     }
 
@@ -74,7 +71,21 @@ pub fn open_or_create_window_with_url(
     .inner_size(980.0, 700.0)
     .skip_taskbar(matches!(label, WindowLabel::Clipboard))
     .decorations(false)
+    .maximizable(false)
     .build()
     .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn focus_existing_window(window: &tauri::Window) -> Result<(), String> {
+    if let Ok(false) = window.is_visible() {
+        window.show().map_err(|e| e.to_string())?;
+    }
+
+    if let Ok(true) = window.is_minimized() {
+        window.unminimize().map_err(|e| e.to_string())?;
+    }
+
+    window.set_focus().map_err(|e| e.to_string())?;
     Ok(())
 }

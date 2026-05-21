@@ -88,6 +88,99 @@ fn current_time_ms() -> u64 {
         .unwrap_or(0)
 }
 
+fn read_file_clipboard_event(ctx: &ClipboardContext) -> Option<ClipboardChangeEvent> {
+    if ctx.has(ContentFormat::Files) {
+        let files = ctx.get_files().unwrap_or_default();
+        return file_clipboard_event_from_paths(files);
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(files) = read_windows_file_list() {
+            return file_clipboard_event_from_paths(files);
+        }
+    }
+
+    None
+}
+
+fn file_clipboard_event_from_paths(files: Vec<String>) -> Option<ClipboardChangeEvent> {
+    let files = files
+        .into_iter()
+        .map(|path| normalize_file_uri(&path).to_string())
+        .filter(|path| !path.trim().is_empty())
+        .collect::<Vec<_>>();
+    if files.is_empty() {
+        return None;
+    }
+
+    let mut file_count = 0usize;
+    let mut folder_count = 0usize;
+    for raw in &files {
+        let path = Path::new(raw);
+        if path.is_dir() {
+            folder_count += 1;
+        } else {
+            file_count += 1;
+        }
+    }
+
+    Some(ClipboardChangeEvent::Files {
+        files,
+        file_count,
+        folder_count,
+    })
+}
+
+fn text_file_list_clipboard_event(
+    text: &str,
+    has_file_format_hint: bool,
+) -> Option<ClipboardChangeEvent> {
+    if !has_file_format_hint {
+        return None;
+    }
+
+    let paths = text
+        .lines()
+        .map(normalize_text_file_path)
+        .filter(|path| !path.is_empty())
+        .collect::<Vec<_>>();
+    if paths.is_empty() || paths.iter().any(|path| !Path::new(path).exists()) {
+        return None;
+    }
+    file_clipboard_event_from_paths(paths)
+}
+
+fn normalize_text_file_path(value: &str) -> String {
+    let trimmed = value
+        .trim()
+        .trim_matches('\u{feff}')
+        .trim_matches('"')
+        .trim_matches('\'')
+        .trim();
+    normalize_file_uri(trimmed).to_string()
+}
+
+fn formats_hint_file_list(formats: &[String]) -> bool {
+    formats.iter().any(|format| {
+        let lower = format.to_ascii_lowercase();
+        lower.contains("hdrop")
+            || lower.contains("file")
+            || lower.contains("uri-list")
+            || lower.contains("uniformresourcelocator")
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn read_windows_file_list() -> Option<Vec<String>> {
+    use clipboard_win::{formats::FileList, Getter};
+
+    let _clip = clipboard_win::Clipboard::new_attempts(3).ok()?;
+    let mut files = Vec::<String>::new();
+    FileList.read_clipboard(&mut files).ok()?;
+    (!files.is_empty()).then_some(files)
+}
+
 impl ClipboardHandler for AppClipboardHandler {
     fn on_clipboard_change(&mut self) {
         if should_suppress_clipboard_change() {
@@ -99,27 +192,10 @@ impl ClipboardHandler for AppClipboardHandler {
 
         if let Ok(ctx) = ClipboardContext::new() {
             let config = self.app_handle.state::<AppConfigStore>().get();
+            let formats = ctx.available_formats().unwrap_or_default();
             // Priority: Files -> rich text/text bundle -> Image.
-            if ctx.has(ContentFormat::Files) {
-                let files = ctx.get_files().unwrap_or_default();
-                let mut file_count = 0usize;
-                let mut folder_count = 0usize;
-
-                for raw in &files {
-                    let normalized = normalize_file_uri(raw);
-                    let path = Path::new(normalized);
-                    if path.is_dir() {
-                        folder_count += 1;
-                    } else {
-                        file_count += 1;
-                    }
-                }
-
-                let _ = self.tx.send(ClipboardChangeEvent::Files {
-                    files,
-                    file_count,
-                    folder_count,
-                });
+            if let Some(event) = read_file_clipboard_event(&ctx) {
+                let _ = self.tx.send(event);
                 return;
             }
 
@@ -173,6 +249,12 @@ impl ClipboardHandler for AppClipboardHandler {
                 }
 
                 if let Some(text) = text {
+                    if let Some(event) =
+                        text_file_list_clipboard_event(&text, formats_hint_file_list(&formats))
+                    {
+                        let _ = self.tx.send(event);
+                        return;
+                    }
                     let _ = self.tx.send(ClipboardChangeEvent::Text(text));
                     return;
                 }
@@ -186,7 +268,6 @@ impl ClipboardHandler for AppClipboardHandler {
                 return;
             }
 
-            let formats = ctx.available_formats().unwrap_or_default();
             let _ = self.tx.send(ClipboardChangeEvent::Unknown { formats });
         }
     }

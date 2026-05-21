@@ -74,6 +74,18 @@ struct DeviceInfoResponse {
 }
 
 #[derive(Serialize)]
+struct LanDiscoveryResponse {
+    device_id: String,
+    device_name: String,
+    lan_address: String,
+    port: u16,
+    base_url: String,
+    sync_access_enabled: bool,
+    password_required: bool,
+    auth_mode: i32,
+}
+
+#[derive(Serialize)]
 pub(super) struct ClipboardContentResponse {
     id: i32,
     r#type: i32,
@@ -155,6 +167,7 @@ struct DiffResponse {
 
 pub fn router() -> Router<HttpState> {
     Router::new()
+        .route("/api/client/discovery", get(lan_discovery))
         .route("/api/client/device", get(device_info))
         .route("/api/client/connect/request", post(request_connection))
         .route(
@@ -188,6 +201,30 @@ async fn device_info(State(state): State<HttpState>) -> Response {
     Json(DeviceInfoResponse {
         device_id: config.local_device_id,
         device_name: config.local_device_name,
+    })
+    .into_response()
+}
+
+async fn lan_discovery(State(state): State<HttpState>) -> Response {
+    let config = state
+        .app
+        .state::<crate::app::config::AppConfigStore>()
+        .get();
+    if !config.lan_discovery_enabled {
+        return json_error(StatusCode::NOT_FOUND, "lan discovery is disabled");
+    }
+
+    let lan_address = config.share_server_bind_ip.clone();
+    let base_url = format!("http://{}:{}", lan_address, config.share_server_port);
+    Json(LanDiscoveryResponse {
+        device_id: config.local_device_id,
+        device_name: config.local_device_name,
+        lan_address,
+        port: config.share_server_port,
+        base_url,
+        sync_access_enabled: config.sync_access_enabled,
+        password_required: config.share_server_password_enabled,
+        auth_mode: config.share_server_auth_mode,
     })
     .into_response()
 }

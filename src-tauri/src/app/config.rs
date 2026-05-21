@@ -1,10 +1,18 @@
 use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io;
+use std::net::Ipv4Addr;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::Arc;
+use std::time::Duration;
 
 use parking_lot::RwLock;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
+use tokio::sync::Semaphore;
+use tokio::time::timeout;
 
 const APP_IDENTIFIER: &str = "com.lkighy.share-clip";
 
@@ -62,6 +70,8 @@ pub struct AppConfig {
     pub share_server_password_hash: Option<String>,
     // 授权模式：0=自动授权，1=需要确认
     pub share_server_auth_mode: i32,
+    // 是否允许其他设备通过局域网扫描发现本机
+    pub lan_discovery_enabled: bool,
     // 是否允许浏览器访问
     pub browser_access_enabled: bool,
     // Web 访问是否默认需要授权
@@ -117,6 +127,7 @@ pub struct AppConfigUpdate {
     pub share_server_password_enabled: Option<bool>,
     pub share_server_password_hash: Option<Option<String>>,
     pub share_server_auth_mode: Option<i32>,
+    pub lan_discovery_enabled: Option<bool>,
     pub browser_access_enabled: Option<bool>,
     pub web_access_auth_required: Option<bool>,
     pub web_access_password_enabled: Option<bool>,
@@ -129,6 +140,28 @@ pub struct AppConfigUpdate {
     pub web_access_scope_download: Option<bool>,
     pub sync_access_enabled: Option<bool>,
     pub popup_on_inbound_request: Option<bool>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LanDiscoveredDevice {
+    pub device_id: String,
+    pub device_name: String,
+    pub ip: String,
+    pub port: u16,
+    pub base_url: String,
+    pub sync_access_enabled: bool,
+    pub password_required: bool,
+    pub auth_mode: i32,
+}
+
+#[derive(Debug, Deserialize)]
+struct LanDiscoveryHttpResponse {
+    device_id: String,
+    device_name: String,
+    port: u16,
+    sync_access_enabled: bool,
+    password_required: bool,
+    auth_mode: i32,
 }
 
 impl AppConfigUpdate {
@@ -229,6 +262,9 @@ impl AppConfigUpdate {
         if let Some(value) = self.share_server_auth_mode {
             config.share_server_auth_mode = value;
         }
+        if let Some(value) = self.lan_discovery_enabled {
+            config.lan_discovery_enabled = value;
+        }
         if let Some(value) = self.browser_access_enabled {
             config.browser_access_enabled = value;
         }
@@ -301,6 +337,7 @@ impl Default for AppConfig {
             share_server_password_enabled: false,
             share_server_password_hash: None,
             share_server_auth_mode: 1,
+            lan_discovery_enabled: true,
             browser_access_enabled: true,
             web_access_auth_required: true,
             web_access_password_enabled: false,
@@ -423,6 +460,120 @@ fn default_cache_dir() -> String {
             .to_string_lossy()
             .into_owned()
     }
+}
+
+pub fn private_ipv4_addresses() -> io::Result<Vec<Ipv4Addr>> {
+    let mut ips = BTreeSet::new();
+    let addrs = if_addrs::get_if_addrs().map_err(io::Error::other)?;
+    for iface in addrs {
+        if let std::net::IpAddr::V4(ipv4) = iface.ip() {
+            if is_private_ipv4(ipv4) {
+                ips.insert(ipv4);
+            }
+        }
+    }
+    Ok(ips.into_iter().collect())
+}
+
+pub async fn scan_lan_devices(
+    port: u16,
+    local_device_id: &str,
+) -> io::Result<Vec<LanDiscoveredDevice>> {
+    let local_ips = private_ipv4_addresses()?;
+    let semaphore = Arc::new(Semaphore::new(64));
+    let mut handles = Vec::new();
+
+    for local_ip in &local_ips {
+        let [a, b, c, local_host] = local_ip.octets();
+        for host in 1..=254u8 {
+            if host == local_host {
+                continue;
+            }
+            let ip = Ipv4Addr::new(a, b, c, host);
+            let permit = semaphore
+                .clone()
+                .acquire_owned()
+                .await
+                .map_err(io::Error::other)?;
+            handles.push(tokio::spawn(async move {
+                let result = probe_lan_device(ip, port).await;
+                drop(permit);
+                result
+            }));
+        }
+    }
+
+    let mut by_device_id = BTreeMap::new();
+    for handle in handles {
+        if let Ok(Ok(device)) = handle.await {
+            if device.device_id != local_device_id {
+                by_device_id.insert(device.device_id.clone(), device);
+            }
+        }
+    }
+
+    Ok(by_device_id.into_values().collect())
+}
+
+async fn probe_lan_device(ip: Ipv4Addr, port: u16) -> io::Result<LanDiscoveredDevice> {
+    let mut stream = timeout(Duration::from_millis(350), TcpStream::connect((ip, port)))
+        .await
+        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "connect timed out"))??;
+
+    let request = "GET /api/client/discovery HTTP/1.1\r\nHost: share-clip.local\r\nConnection: close\r\nAccept: application/json\r\n\r\n";
+    timeout(
+        Duration::from_millis(350),
+        stream.write_all(request.as_bytes()),
+    )
+    .await
+    .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "write timed out"))??;
+
+    let mut buf = Vec::new();
+    timeout(Duration::from_millis(700), stream.read_to_end(&mut buf))
+        .await
+        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "read timed out"))??;
+
+    parse_lan_discovery_response(ip, port, &buf)
+}
+
+fn parse_lan_discovery_response(
+    ip: Ipv4Addr,
+    fallback_port: u16,
+    response: &[u8],
+) -> io::Result<LanDiscoveredDevice> {
+    let text = String::from_utf8_lossy(response);
+    let (head, body) = text
+        .split_once("\r\n\r\n")
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid http response"))?;
+    if !head.starts_with("HTTP/1.1 200") && !head.starts_with("HTTP/1.0 200") {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "not discovered"));
+    }
+    let body = body.trim();
+    let payload: LanDiscoveryHttpResponse = serde_json::from_str(body).map_err(io::Error::other)?;
+    let port = if payload.port == 0 {
+        fallback_port
+    } else {
+        payload.port
+    };
+    let ip_text = ip.to_string();
+    Ok(LanDiscoveredDevice {
+        device_id: payload.device_id,
+        device_name: payload.device_name,
+        ip: ip_text.clone(),
+        port,
+        base_url: format!("http://{ip_text}:{port}"),
+        sync_access_enabled: payload.sync_access_enabled,
+        password_required: payload.password_required,
+        auth_mode: payload.auth_mode,
+    })
+}
+
+pub fn is_private_ipv4(ipv4: Ipv4Addr) -> bool {
+    let octets = ipv4.octets();
+    !ipv4.is_loopback()
+        && (octets[0] == 10
+            || (octets[0] == 172 && (16..=31).contains(&octets[1]))
+            || (octets[0] == 192 && octets[1] == 168))
 }
 
 fn config_file_path() -> PathBuf {

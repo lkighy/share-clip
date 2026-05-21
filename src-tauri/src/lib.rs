@@ -120,6 +120,7 @@ pub fn run() {
             config_commands::get_local_device_info,
             config_commands::update_app_config,
             config_commands::get_share_server_ip_options,
+            config_commands::scan_lan_share_devices,
             server_commands::start_share_server,
             server_commands::stop_share_server,
             server_commands::share_server_status,

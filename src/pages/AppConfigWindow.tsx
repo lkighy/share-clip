@@ -1,6 +1,4 @@
-import type { MouseEvent } from "react";
 import { useEffect, useState } from "react";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { toast } from "sonner";
 import { FolderOpen, RefreshCcw, X } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -13,6 +11,7 @@ import { loadAppConfig, saveAppConfig, useAppConfigStore } from "@/store/appConf
 import HotkeyInput from "@/components/ui/HotkeyInput.tsx";
 import { SettingsRow, SettingsSection } from "@/components/settings/SettingsLayout";
 import { operationWindow } from "@/api/window.ts";
+import { startWindowDrag } from "@/lib/windowDrag";
 
 type AppConfigForm = {
   local_device_name: string;
@@ -40,6 +39,7 @@ type AppConfigForm = {
   share_server_password_enabled: boolean;
   share_server_password_hash: string;
   share_server_auth_mode: string;
+  lan_discovery_enabled: boolean;
   browser_access_enabled: boolean;
   web_access_auth_required: boolean;
   web_access_password_enabled: boolean;
@@ -80,6 +80,7 @@ const emptyForm: AppConfigForm = {
   share_server_password_enabled: false,
   share_server_password_hash: "",
   share_server_auth_mode: "1",
+  lan_discovery_enabled: true,
   browser_access_enabled: true,
   web_access_auth_required: true,
   web_access_password_enabled: false,
@@ -121,6 +122,7 @@ function toForm(config: AppConfig): AppConfigForm {
     share_server_password_enabled: config.share_server_password_enabled ?? false,
     share_server_password_hash: config.share_server_password_hash ?? "",
     share_server_auth_mode: String(config.share_server_auth_mode ?? 1),
+    lan_discovery_enabled: config.lan_discovery_enabled ?? true,
     browser_access_enabled: config.browser_access_enabled ?? true,
     web_access_auth_required: config.web_access_auth_required ?? true,
     web_access_password_enabled: config.web_access_password_enabled ?? false,
@@ -155,6 +157,20 @@ function parseInteger(value: string, fieldLabel: string, min: number) {
     throw new Error(`${fieldLabel}不能小于 ${min}`);
   }
   return parsed;
+}
+
+function shareServerIpLabel(ip: string) {
+  if (ip === "0.0.0.0") return "所有网络";
+  if (ip === "127.0.0.1" || ip === "localhost") return "仅本机";
+  if (/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[0-1])\.)/.test(ip)) return "局域网";
+  return "指定网络";
+}
+
+function shareServerIpDescription(ip: string) {
+  if (ip === "0.0.0.0") return "监听所有网卡，局域网和本机都可以访问。";
+  if (ip === "127.0.0.1" || ip === "localhost") return "只对本机开放，其他设备无法连接或扫描。";
+  if (/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[0-1])\.)/.test(ip)) return "只监听这个局域网地址，同网段设备可访问。";
+  return "只监听该指定地址，请确认网络和防火墙允许访问。";
 }
 
 export default function AppConfigWindow() {
@@ -207,17 +223,6 @@ export default function AppConfigWindow() {
       console.error(error);
       toast.error("加载配置失败");
     }
-  };
-
-  const handleTitleBarMouseDown = async (e: MouseEvent<HTMLElement>) => {
-    if (e.button !== 0) {
-      return;
-    }
-    const target = e.target as HTMLElement;
-    if (target.closest("button,a,input,textarea,select,[data-no-drag='true']")) {
-      return;
-    }
-    await getCurrentWindow().startDragging();
   };
 
   const handleSelectDirectory = async (field: "cache_dir" | "remote_cache_dir") => {
@@ -320,6 +325,7 @@ export default function AppConfigWindow() {
         share_server_password_enabled: form.share_server_password_enabled,
         share_server_password_hash: form.share_server_password_hash.trim() || null,
         share_server_auth_mode: shareServerAuthMode,
+        lan_discovery_enabled: form.lan_discovery_enabled,
         browser_access_enabled: form.browser_access_enabled,
         web_access_auth_required: form.web_access_auth_required,
         web_access_password_enabled: form.web_access_password_enabled,
@@ -345,11 +351,11 @@ export default function AppConfigWindow() {
   return (
     <main className="fluent-shell flex h-screen flex-col overflow-hidden" onContextMenu={(e) => e.preventDefault()}>
       <Toaster />
-      <header className="fluent-titlebar" data-tauri-drag-region onMouseDown={handleTitleBarMouseDown}>
+      <header className="fluent-titlebar" onMouseDown={(event) => void startWindowDrag(event)}>
         <Button variant="ghost" size="icon" className="h-8 w-8 rounded-md hover:bg-slate-200/70" data-no-drag="true" onClick={() => void handleReload(true)} disabled={loading}>
           <RefreshCcw size={16} />
         </Button>
-        <div className="select-none text-center" data-tauri-drag-region>
+        <div className="select-none text-center">
           <h1 className="text-sm font-semibold text-slate-950">设置</h1>
           <p className="text-[11px] text-slate-500">应用偏好与共享服务</p>
         </div>
@@ -370,11 +376,14 @@ export default function AppConfigWindow() {
                 <input className="fluent-check" type="checkbox" checked={form.auto_start_share_server} onChange={(e) => setForm((prev) => ({ ...prev, auto_start_share_server: e.target.checked }))} />
               </SettingsRow>
               <SettingsRow label="绑定 IP">
-                <select className="fluent-input" value={form.share_server_bind_ip} onChange={(e) => setForm((prev) => ({ ...prev, share_server_bind_ip: e.target.value }))}>
-                  {ipOptions.map((ip) => (
-                    <option key={ip} value={ip}>{ip}</option>
-                  ))}
-                </select>
+                <div className="space-y-1">
+                  <select className="fluent-input" value={form.share_server_bind_ip} onChange={(e) => setForm((prev) => ({ ...prev, share_server_bind_ip: e.target.value }))}>
+                    {ipOptions.map((ip) => (
+                      <option key={ip} value={ip}>{ip} - {shareServerIpLabel(ip)}</option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-slate-500">{shareServerIpDescription(form.share_server_bind_ip)}</p>
+                </div>
               </SettingsRow>
               <SettingsRow label="端口">
                 <input className="fluent-input" value={form.share_server_port} onChange={(e) => setForm((prev) => ({ ...prev, share_server_port: e.target.value }))} placeholder="24800" />
@@ -390,6 +399,9 @@ export default function AppConfigWindow() {
                   <option value="1">需要确认</option>
                   <option value="0">自动授权</option>
                 </select>
+              </SettingsRow>
+              <SettingsRow label="允许局域网扫描">
+                <input className="fluent-check" type="checkbox" checked={form.lan_discovery_enabled} onChange={(e) => setForm((prev) => ({ ...prev, lan_discovery_enabled: e.target.checked }))} />
               </SettingsRow>
               <SettingsRow label="浏览器访问">
                 <input className="fluent-check" type="checkbox" checked={form.browser_access_enabled} onChange={(e) => setForm((prev) => ({ ...prev, browser_access_enabled: e.target.checked }))} />

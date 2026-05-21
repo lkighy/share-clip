@@ -13,6 +13,21 @@ export function getShareServerIpOptions() {
   return call<string[]>("get_share_server_ip_options");
 }
 
+export type LanDiscoveredDevice = {
+  device_id: string;
+  device_name: string;
+  ip: string;
+  port: number;
+  base_url: string;
+  sync_access_enabled: boolean;
+  password_required: boolean;
+  auth_mode: number;
+};
+
+export function scanLanShareDevices() {
+  return call<LanDiscoveredDevice[]>("scan_lan_share_devices");
+}
+
 export function openLogDir() {
   return call<void>("open_log_dir");
 }
