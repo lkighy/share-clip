@@ -1,6 +1,6 @@
 [package]
 name = "share-clip"
-version = "0.3.0"
+version = "0.4.0"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -54,6 +54,7 @@ html2text = "0.12.5"
 regex = "1.11.1"
 log = "0.4"
 axum = "0.8.8"
+reqwest = "0.12.28"
 tauri-plugin-dialog = "2"
 blake3 = "1.8.2"
 notify = "8.2.0"

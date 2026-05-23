@@ -2,6 +2,7 @@ import type { LocalDeviceInfo } from "@/api/appConfig";
 import type { RemoteClipboardSyncTarget } from "@/api/clipboard";
 import {
   cacheRemoteSharedFile,
+  downloadRemoteSharedFile,
   getRemoteCacheStatus,
   type RemoteShareUser,
 } from "@/api/shareFiles";
@@ -89,27 +90,6 @@ async function fetchRemoteIndex(baseUrl: string, shareId: string, auth: RemoteAu
   return items;
 }
 
-async function fetchRemoteFileBlob(baseUrl: string, shareId: string, relativePath: string, auth: RemoteAuthHeaders) {
-  const response = await fetch(
-    `${baseUrl}/api/client/shares/${encodeURIComponent(shareId)}/download?path=${encodeURIComponent(relativePath)}`,
-    { headers: remoteAuthHeaders(auth) },
-  );
-  if (!response.ok) await throwRemoteHttpError(response, "下载远程文件失败");
-  return response.blob();
-}
-
-async function blobToBase64(blob: Blob) {
-  return new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = String(reader.result || "");
-      resolve(result.includes(",") ? result.slice(result.indexOf(",") + 1) : result);
-    };
-    reader.onerror = () => reject(reader.error || new Error("读取远程文件失败"));
-    reader.readAsDataURL(blob);
-  });
-}
-
 function syncTargetFromClipboard(target: RemoteClipboardSyncTarget): RemoteSyncTarget {
   return {
     shareId: target.share_id,
@@ -165,19 +145,18 @@ async function syncRemoteFile(baseUrl: string, remote: RemoteShareUser, auth: Re
     return cacheStatus.local_cache_path;
   }
 
-  const blob = await fetchRemoteFileBlob(baseUrl, target.shareId, relativePath, auth);
-  const dataBase64 = await blobToBase64(blob);
-  return cacheRemoteSharedFile({
+  return downloadRemoteSharedFile({
     remote_user_id: remote.user_id,
+    base_url: baseUrl,
+    auth_user_id: auth.userId,
+    auth_device_id: auth.deviceId,
     share_id: target.shareId,
     share_name: target.shareName,
     relative_path: relativePath,
     name: target.name,
-    is_dir: false,
-    size: target.size ?? blob.size,
+    size: target.size ?? null,
     mtime: target.mtime ?? null,
     hash: target.hash ?? null,
-    data_base64: dataBase64,
   });
 }
 

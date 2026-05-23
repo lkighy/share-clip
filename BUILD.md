@@ -71,8 +71,8 @@ https://github.com/tauri-apps/tauri-action
 建议发布流程：
 
 ```shell
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.4.0
+git push origin v0.4.0
 ```
 
 由 tag 触发 release workflow，在 Windows、Linux 和 macOS 上分别构建安装包。

@@ -6,7 +6,8 @@ use sea_orm::{
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
+use tokio::io::AsyncWriteExt;
 
 use crate::db::service::local_files::{
     parse_source_clipboard_ids, source_type_after_adding_direct, SHARE_MODE_MANUAL, SOURCE_DIRECT,
@@ -113,6 +114,35 @@ pub struct CacheRemoteSharedFilePayload {
     pub mtime: Option<i64>,
     pub hash: Option<String>,
     pub data_base64: Option<String>,
+    pub destination_dir: Option<String>,
+    pub destination_root_relative_path: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DownloadRemoteSharedFilePayload {
+    pub remote_user_id: String,
+    pub base_url: String,
+    pub auth_user_id: String,
+    pub auth_device_id: String,
+    pub share_id: String,
+    pub share_name: String,
+    pub relative_path: String,
+    pub name: String,
+    pub size: Option<i64>,
+    pub mtime: Option<i64>,
+    pub hash: Option<String>,
+    pub transfer_task_id: Option<String>,
+    pub destination_dir: Option<String>,
+    pub destination_root_relative_path: Option<String>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct RemoteDownloadProgressPayload {
+    pub transfer_task_id: String,
+    pub relative_path: String,
+    pub loaded: i64,
+    pub total: Option<i64>,
+    pub progress: f64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -149,6 +179,19 @@ pub struct RemoteCacheStatus {
     pub updated_at: Option<i64>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct ValidateEmptyDirectoryPayload {
+    pub path: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct MoveRemoteCachePayload {
+    pub remote_user_id: String,
+    pub share_id: String,
+    pub relative_path: String,
+    pub destination_dir: String,
+}
+
 #[derive(Debug, Serialize)]
 pub struct RemoteCachedFileItem {
     pub remote_user_id: String,
@@ -165,6 +208,8 @@ pub struct RemoteCachedFileItem {
     pub cache_status: i32,
     pub updated_at: Option<i64>,
 }
+
+const REMOTE_DOWNLOAD_PROGRESS_EVENT: &str = "share://remote-download-progress";
 
 #[tauri::command]
 pub async fn list_remote_share_users(
@@ -863,6 +908,15 @@ pub async fn list_remote_cached_files(
 }
 
 #[tauri::command]
+pub async fn validate_empty_directory(
+    payload: ValidateEmptyDirectoryPayload,
+) -> Result<(), ApiError> {
+    let path = PathBuf::from(payload.path.trim());
+    ensure_empty_directory(&path).await?;
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn cache_remote_shared_file(
     app: tauri::AppHandle,
     payload: CacheRemoteSharedFilePayload,
@@ -876,7 +930,7 @@ pub async fn cache_remote_shared_file(
         return Err(AppError::InvalidInput("远程用户和共享 ID 不能为空".to_string()).into());
     }
 
-    let cache_path = remote_cache_path(
+    let cache_path = remote_cache_path_for_payload(
         &config.remote_cache_dir,
         &remote_user_id,
         &share_id,
@@ -884,7 +938,10 @@ pub async fn cache_remote_shared_file(
         &relative_path,
         payload.name.trim(),
         payload.is_dir,
-    )?;
+        payload.destination_dir.as_deref(),
+        payload.destination_root_relative_path.as_deref(),
+    )
+    .await?;
 
     if payload.is_dir {
         tokio::fs::create_dir_all(&cache_path)
@@ -908,48 +965,81 @@ pub async fn cache_remote_shared_file(
             .map_err(AppError::from)?;
     }
 
-    let now = chrono::Utc::now().timestamp();
     let path_text = cache_path.to_string_lossy().to_string();
-    let existing = shared_file_index::Entity::find_by_id((
-        remote_user_id.clone(),
-        share_id.clone(),
+    upsert_remote_cache_index(
+        db,
+        &remote_user_id,
+        &share_id,
         relative_path.clone(),
-    ))
-    .one(db)
-    .await
-    .map_err(AppError::from)?;
+        payload.name,
+        payload.is_dir,
+        Some(path_text.clone()),
+        payload.size,
+        payload.mtime,
+        payload.hash,
+    )
+    .await?;
 
-    if let Some(row) = existing {
-        let mut am: shared_file_index::ActiveModel = row.into();
-        am.name = Set(payload.name);
-        am.is_dir = Set(if payload.is_dir { 1 } else { 0 });
-        am.local_cache_path = Set(Some(path_text.clone()));
-        am.size = Set(payload.size);
-        am.mtime = Set(payload.mtime);
-        am.hash = Set(payload.hash);
-        am.remote_deleted = Set(0);
-        am.cache_status = Set(2);
-        am.last_accessed_at = Set(Some(now));
-        am.updated_at = Set(Some(now));
-        am.update(db).await.map_err(AppError::from)?;
-    } else {
-        let am = shared_file_index::ActiveModel {
-            user_id: Set(remote_user_id.clone()),
-            shared_file_id: Set(share_id.clone()),
-            relative_path: Set(relative_path.clone()),
-            name: Set(payload.name),
-            is_dir: Set(if payload.is_dir { 1 } else { 0 }),
-            local_cache_path: Set(Some(path_text.clone())),
-            size: Set(payload.size),
-            mtime: Set(payload.mtime),
-            hash: Set(payload.hash),
-            remote_deleted: Set(0),
-            cache_status: Set(2),
-            last_accessed_at: Set(Some(now)),
-            updated_at: Set(Some(now)),
-        };
-        am.insert(db).await.map_err(AppError::from)?;
+    crate::app::events::emit_shared_file_index_changed(
+        &app,
+        vec![format!("{remote_user_id}:{share_id}:{relative_path}")],
+        "remote_cache_updated",
+    );
+    Ok(path_text)
+}
+
+#[tauri::command]
+pub async fn download_remote_shared_file(
+    app: tauri::AppHandle,
+    payload: DownloadRemoteSharedFilePayload,
+) -> Result<String, ApiError> {
+    let db = &app.state::<crate::db::DbState>().conn;
+    let config = app.state::<crate::app::config::AppConfigStore>().get();
+    let remote_user_id = payload.remote_user_id.trim().to_string();
+    let share_id = payload.share_id.trim().to_string();
+    let relative_path = normalize_remote_relative_path(&payload.relative_path)?;
+    let share_name = payload.share_name.trim().to_string();
+    let name = payload.name.trim().to_string();
+    if remote_user_id.is_empty() || share_id.is_empty() {
+        return Err(AppError::InvalidInput("远程用户和共享 ID 不能为空".to_string()).into());
     }
+    if name.is_empty() {
+        return Err(AppError::InvalidInput("远程文件名不能为空".to_string()).into());
+    }
+
+    let cache_path = remote_cache_path_for_payload(
+        &config.remote_cache_dir,
+        &remote_user_id,
+        &share_id,
+        &share_name,
+        &relative_path,
+        &name,
+        false,
+        payload.destination_dir.as_deref(),
+        payload.destination_root_relative_path.as_deref(),
+    )
+    .await?;
+    download_remote_file_to_path(&app, &payload, &share_id, &relative_path, &cache_path).await?;
+
+    let actual_size = tokio::fs::metadata(&cache_path)
+        .await
+        .map(|metadata| metadata.len() as i64)
+        .ok();
+    let size = payload.size.or(actual_size);
+    let path_text = cache_path.to_string_lossy().to_string();
+    upsert_remote_cache_index(
+        db,
+        &remote_user_id,
+        &share_id,
+        relative_path.clone(),
+        name,
+        false,
+        Some(path_text.clone()),
+        size,
+        payload.mtime,
+        payload.hash,
+    )
+    .await?;
 
     crate::app::events::emit_shared_file_index_changed(
         &app,
@@ -1035,6 +1125,86 @@ pub async fn remove_remote_shared_cache(
         "remote_cache_removed",
     );
     Ok(())
+}
+
+#[tauri::command]
+pub async fn move_remote_shared_cache(
+    app: tauri::AppHandle,
+    payload: MoveRemoteCachePayload,
+) -> Result<String, ApiError> {
+    let db = &app.state::<crate::db::DbState>().conn;
+    let remote_user_id = payload.remote_user_id.trim().to_string();
+    let share_id = payload.share_id.trim().to_string();
+    let relative_path = normalize_remote_relative_path(&payload.relative_path)?;
+    if remote_user_id.is_empty() || share_id.is_empty() {
+        return Err(AppError::InvalidInput("远程用户和共享 ID 不能为空".to_string()).into());
+    }
+
+    let destination_root = PathBuf::from(payload.destination_dir.trim());
+    ensure_empty_directory(&destination_root).await?;
+
+    let rows = shared_file_index::Entity::find()
+        .filter(shared_file_index::Column::UserId.eq(remote_user_id.clone()))
+        .filter(shared_file_index::Column::SharedFileId.eq(share_id.clone()))
+        .all(db)
+        .await
+        .map_err(AppError::from)?;
+    let mut targets = rows
+        .into_iter()
+        .filter(|row| remote_cache_row_in_scope(&relative_path, &row.relative_path))
+        .collect::<Vec<_>>();
+    if targets.is_empty() {
+        return Err(AppError::InvalidInput("该远程项还没有缓存，请先同步".to_string()).into());
+    }
+    targets.sort_by_key(|row| remote_path_depth(&row.relative_path));
+
+    let root_row = targets
+        .iter()
+        .find(|row| row.relative_path == relative_path)
+        .ok_or_else(|| AppError::InvalidInput("该远程项还没有缓存，请先同步".to_string()))?;
+    let source_root = root_row
+        .local_cache_path
+        .as_deref()
+        .map(PathBuf::from)
+        .ok_or_else(|| AppError::InvalidInput("缓存路径不存在，请重新同步".to_string()))?;
+    if !source_root.exists() {
+        return Err(AppError::InvalidInput("缓存路径不存在，请重新同步".to_string()).into());
+    }
+
+    let source_root_canonical = std::fs::canonicalize(&source_root).map_err(AppError::from)?;
+    if source_root_canonical == std::fs::canonicalize(&destination_root).map_err(AppError::from)? {
+        return Err(AppError::InvalidInput("请选择不同的缓存位置".to_string()).into());
+    }
+    let root_destination = destination_cache_path(
+        &destination_root,
+        &root_row.relative_path,
+        &root_row.name,
+        root_row.is_dir == 1,
+        Some(&relative_path),
+    )?;
+    move_cached_path(&source_root, &root_destination).await?;
+
+    let now = chrono::Utc::now().timestamp();
+    let mut changed_ids = Vec::new();
+    for row in targets {
+        let row_relative_path = row.relative_path.clone();
+        let new_path = destination_cache_path(
+            &destination_root,
+            &row_relative_path,
+            &row.name,
+            row.is_dir == 1,
+            Some(&relative_path),
+        )?;
+        let mut am: shared_file_index::ActiveModel = row.into();
+        am.local_cache_path = Set(Some(new_path.to_string_lossy().to_string()));
+        am.last_accessed_at = Set(Some(now));
+        am.updated_at = Set(Some(now));
+        am.update(db).await.map_err(AppError::from)?;
+        changed_ids.push(format!("{remote_user_id}:{share_id}:{row_relative_path}"));
+    }
+
+    crate::app::events::emit_shared_file_index_changed(&app, changed_ids, "remote_cache_moved");
+    Ok(destination_root.to_string_lossy().to_string())
 }
 
 fn normalize_remote_relative_path(path: &str) -> Result<String, AppError> {
@@ -1124,6 +1294,348 @@ fn remote_cache_row_in_scope(parent: &str, child: &str) -> bool {
     child == parent || child.starts_with(&format!("{}/", parent.trim_end_matches('/')))
 }
 
+async fn download_remote_file_to_path(
+    app: &tauri::AppHandle,
+    payload: &DownloadRemoteSharedFilePayload,
+    share_id: &str,
+    relative_path: &str,
+    cache_path: &Path,
+) -> Result<(), ApiError> {
+    if let Some(parent) = cache_path.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(AppError::from)?;
+    }
+
+    let url = remote_download_url(&payload.base_url, share_id, relative_path)?;
+    let client = reqwest::Client::new();
+    let mut response = client
+        .get(url)
+        .header("x-share-clip-user-id", payload.auth_user_id.trim())
+        .header("x-share-clip-device-id", payload.auth_device_id.trim())
+        .send()
+        .await
+        .map_err(|e| AppError::InvalidInput(format!("下载远程文件失败: {e}")))?;
+    let status = response.status();
+    if !status.is_success() {
+        let detail = response
+            .text()
+            .await
+            .unwrap_or_default()
+            .trim()
+            .replace(char::is_whitespace, " ");
+        let detail = parse_remote_error_detail(&detail);
+        return Err(AppError::InvalidInput(format!(
+            "下载远程文件失败: HTTP {}{}",
+            status.as_u16(),
+            if detail.is_empty() {
+                String::new()
+            } else {
+                format!(" ({detail})")
+            }
+        ))
+        .into());
+    }
+
+    let total = response
+        .content_length()
+        .and_then(|value| i64::try_from(value).ok())
+        .or(payload.size);
+    let mut loaded = 0i64;
+    let temp_path = remote_download_temp_path(cache_path);
+    let mut file = tokio::fs::File::create(&temp_path)
+        .await
+        .map_err(AppError::from)?;
+
+    emit_remote_download_progress(app, payload, relative_path, loaded, total, false);
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|e| AppError::InvalidInput(format!("读取远程文件失败: {e}")))?
+    {
+        file.write_all(&chunk).await.map_err(AppError::from)?;
+        loaded = loaded.saturating_add(chunk.len() as i64);
+        emit_remote_download_progress(app, payload, relative_path, loaded, total, false);
+    }
+    file.flush().await.map_err(AppError::from)?;
+    drop(file);
+    if cache_path.exists() {
+        tokio::fs::remove_file(cache_path)
+            .await
+            .map_err(AppError::from)?;
+    }
+    tokio::fs::rename(&temp_path, cache_path)
+        .await
+        .map_err(AppError::from)?;
+    emit_remote_download_progress(
+        app,
+        payload,
+        relative_path,
+        loaded,
+        total.or(Some(loaded)),
+        true,
+    );
+    Ok(())
+}
+
+async fn remote_cache_path_for_payload(
+    configured_root: &str,
+    remote_user_id: &str,
+    share_id: &str,
+    share_name: &str,
+    relative_path: &str,
+    item_name: &str,
+    is_dir: bool,
+    destination_dir: Option<&str>,
+    destination_root_relative_path: Option<&str>,
+) -> Result<PathBuf, ApiError> {
+    if let Some(destination_dir) = destination_dir
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let destination_root = PathBuf::from(destination_dir);
+        if should_validate_destination_root(relative_path, destination_root_relative_path)? {
+            ensure_empty_directory(&destination_root).await?;
+        }
+        return destination_cache_path(
+            &destination_root,
+            relative_path,
+            item_name,
+            is_dir,
+            destination_root_relative_path,
+        );
+    }
+
+    remote_cache_path(
+        configured_root,
+        remote_user_id,
+        share_id,
+        share_name,
+        relative_path,
+        item_name,
+        is_dir,
+    )
+}
+
+fn should_validate_destination_root(
+    relative_path: &str,
+    destination_root_relative_path: Option<&str>,
+) -> Result<bool, ApiError> {
+    let root_relative_path = destination_root_relative_path
+        .map(normalize_remote_relative_path)
+        .transpose()?
+        .unwrap_or_else(|| relative_path.to_string());
+    Ok(normalize_remote_relative_path(relative_path)? == root_relative_path)
+}
+
+fn destination_cache_path(
+    destination_root: &Path,
+    relative_path: &str,
+    item_name: &str,
+    is_dir: bool,
+    destination_root_relative_path: Option<&str>,
+) -> Result<PathBuf, ApiError> {
+    let root_relative_path = destination_root_relative_path
+        .map(normalize_remote_relative_path)
+        .transpose()?
+        .unwrap_or_else(|| relative_path.to_string());
+    let relative_path = normalize_remote_relative_path(relative_path)?;
+
+    if relative_path == root_relative_path {
+        if is_dir {
+            return Ok(destination_root.to_path_buf());
+        }
+        return Ok(destination_root.join(safe_path_segment(item_name, "download.bin")));
+    }
+
+    if root_relative_path != "." {
+        let prefix = format!("{}/", root_relative_path.trim_end_matches('/'));
+        let Some(rest) = relative_path.strip_prefix(&prefix) else {
+            return Err(AppError::InvalidInput("目标路径不在选择的远程目录内".to_string()).into());
+        };
+        let mut target = destination_root.to_path_buf();
+        append_safe_relative_path(&mut target, rest)?;
+        return Ok(target);
+    }
+
+    let mut target = destination_root.to_path_buf();
+    append_safe_relative_path(&mut target, &relative_path)?;
+    Ok(target)
+}
+
+async fn ensure_empty_directory(path: &Path) -> Result<(), ApiError> {
+    if path.as_os_str().is_empty() {
+        return Err(AppError::InvalidInput("请选择有效的目标文件夹".to_string()).into());
+    }
+    let metadata = tokio::fs::metadata(path).await.map_err(AppError::from)?;
+    if !metadata.is_dir() {
+        return Err(AppError::InvalidInput("请选择文件夹作为目标位置".to_string()).into());
+    }
+    let mut entries = tokio::fs::read_dir(path).await.map_err(AppError::from)?;
+    if entries
+        .next_entry()
+        .await
+        .map_err(AppError::from)?
+        .is_some()
+    {
+        return Err(AppError::InvalidInput("目标文件夹必须为空".to_string()).into());
+    }
+    Ok(())
+}
+
+async fn upsert_remote_cache_index(
+    db: &sea_orm::DatabaseConnection,
+    remote_user_id: &str,
+    share_id: &str,
+    relative_path: String,
+    name: String,
+    is_dir: bool,
+    local_cache_path: Option<String>,
+    size: Option<i64>,
+    mtime: Option<i64>,
+    hash: Option<String>,
+) -> Result<(), AppError> {
+    let now = chrono::Utc::now().timestamp();
+    let existing = shared_file_index::Entity::find_by_id((
+        remote_user_id.to_string(),
+        share_id.to_string(),
+        relative_path.clone(),
+    ))
+    .one(db)
+    .await
+    .map_err(AppError::from)?;
+
+    if let Some(row) = existing {
+        let mut am: shared_file_index::ActiveModel = row.into();
+        am.name = Set(name);
+        am.is_dir = Set(if is_dir { 1 } else { 0 });
+        am.local_cache_path = Set(local_cache_path);
+        am.size = Set(size);
+        am.mtime = Set(mtime);
+        am.hash = Set(hash);
+        am.remote_deleted = Set(0);
+        am.cache_status = Set(2);
+        am.last_accessed_at = Set(Some(now));
+        am.updated_at = Set(Some(now));
+        am.update(db).await.map_err(AppError::from)?;
+    } else {
+        let am = shared_file_index::ActiveModel {
+            user_id: Set(remote_user_id.to_string()),
+            shared_file_id: Set(share_id.to_string()),
+            relative_path: Set(relative_path),
+            name: Set(name),
+            is_dir: Set(if is_dir { 1 } else { 0 }),
+            local_cache_path: Set(local_cache_path),
+            size: Set(size),
+            mtime: Set(mtime),
+            hash: Set(hash),
+            remote_deleted: Set(0),
+            cache_status: Set(2),
+            last_accessed_at: Set(Some(now)),
+            updated_at: Set(Some(now)),
+        };
+        am.insert(db).await.map_err(AppError::from)?;
+    }
+    Ok(())
+}
+
+fn remote_download_url(
+    base_url: &str,
+    share_id: &str,
+    relative_path: &str,
+) -> Result<String, ApiError> {
+    let mut url = reqwest::Url::parse(&normalized_remote_base_url(base_url))
+        .map_err(|e| AppError::InvalidInput(format!("远程地址不合法: {e}")))?;
+    let base_path = url.path().trim_end_matches('/').to_string();
+    url.set_path(&format!(
+        "{base_path}/api/client/shares/{}/download",
+        encode_uri_component(share_id)
+    ));
+    url.query_pairs_mut().append_pair("path", relative_path);
+    Ok(url.to_string())
+}
+
+fn normalized_remote_base_url(raw: &str) -> String {
+    let value = raw.trim().trim_end_matches('/');
+    if value.to_ascii_lowercase().starts_with("http://")
+        || value.to_ascii_lowercase().starts_with("https://")
+    {
+        value.to_string()
+    } else {
+        format!("http://{value}")
+    }
+}
+
+fn encode_uri_component(value: &str) -> String {
+    let mut out = String::new();
+    for byte in value.as_bytes() {
+        match *byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(*byte as char)
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
+}
+
+fn parse_remote_error_detail(detail: &str) -> String {
+    if detail.is_empty() {
+        return String::new();
+    }
+    serde_json::from_str::<serde_json::Value>(detail)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("error")
+                .or_else(|| value.get("message"))
+                .and_then(|inner| inner.as_str())
+                .map(ToOwned::to_owned)
+        })
+        .unwrap_or_else(|| detail.chars().take(120).collect())
+}
+
+fn remote_download_temp_path(cache_path: &Path) -> PathBuf {
+    let file_name = cache_path
+        .file_name()
+        .map(|value| value.to_string_lossy())
+        .unwrap_or_else(|| "download".into());
+    cache_path.with_file_name(format!("{}.{}.download", file_name, uuid::Uuid::new_v4()))
+}
+
+fn emit_remote_download_progress(
+    app: &tauri::AppHandle,
+    payload: &DownloadRemoteSharedFilePayload,
+    relative_path: &str,
+    loaded: i64,
+    total: Option<i64>,
+    finished: bool,
+) {
+    let Some(transfer_task_id) = payload
+        .transfer_task_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return;
+    };
+    let progress = total
+        .filter(|value| *value > 0)
+        .map(|value| (loaded as f64 / value as f64) * 100.0)
+        .unwrap_or(if finished { 100.0 } else { 0.0 })
+        .clamp(0.0, 100.0);
+    let _ = app.emit(
+        REMOTE_DOWNLOAD_PROGRESS_EVENT,
+        RemoteDownloadProgressPayload {
+            transfer_task_id: transfer_task_id.to_string(),
+            relative_path: relative_path.to_string(),
+            loaded,
+            total,
+            progress,
+        },
+    );
+}
+
 async fn remove_cached_path(cache_root: &Path, path: &Path) -> Result<(), ApiError> {
     if !path.exists() {
         return Ok(());
@@ -1146,6 +1658,91 @@ async fn remove_cached_path(cache_root: &Path, path: &Path) -> Result<(), ApiErr
         tokio::fs::remove_file(&canonical_path)
             .await
             .map_err(AppError::from)?;
+    }
+    Ok(())
+}
+
+async fn move_cached_path(source: &Path, destination: &Path) -> Result<(), ApiError> {
+    if !source.exists() {
+        return Err(AppError::InvalidInput("缓存路径不存在，请重新同步".to_string()).into());
+    }
+    let source_metadata = tokio::fs::metadata(source).await.map_err(AppError::from)?;
+    if source_metadata.is_dir() {
+        if destination.exists() {
+            ensure_empty_directory(destination).await?;
+        } else {
+            tokio::fs::create_dir_all(destination)
+                .await
+                .map_err(AppError::from)?;
+        }
+    } else {
+        if let Some(parent) = destination.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(AppError::from)?;
+        }
+        if destination.exists() {
+            return Err(AppError::InvalidInput("目标文件已存在".to_string()).into());
+        }
+    }
+
+    match tokio::fs::rename(source, destination).await {
+        Ok(()) => Ok(()),
+        Err(rename_error) => {
+            log::warn!("rename cache failed, fallback to copy: {rename_error}");
+            copy_path_recursive(source, destination).await?;
+            remove_path_recursive(source).await?;
+            Ok(())
+        }
+    }
+}
+
+async fn copy_path_recursive(source: &Path, destination: &Path) -> Result<(), ApiError> {
+    let source = source.to_path_buf();
+    let destination = destination.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        if source.is_dir() {
+            copy_dir_recursive_blocking(&source, &destination)
+        } else {
+            if let Some(parent) = destination.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::copy(&source, &destination)?;
+            Ok(())
+        }
+    })
+    .await
+    .map_err(|e| AppError::Internal(anyhow::anyhow!("copy cache task failed: {e}")))?
+    .map_err(AppError::from)?;
+    Ok(())
+}
+
+fn copy_dir_recursive_blocking(source: &Path, destination: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(destination)?;
+    for entry in std::fs::read_dir(source)? {
+        let entry = entry?;
+        let source_path = entry.path();
+        let destination_path = destination.join(entry.file_name());
+        if source_path.is_dir() {
+            copy_dir_recursive_blocking(&source_path, &destination_path)?;
+        } else {
+            if let Some(parent) = destination_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::copy(&source_path, &destination_path)?;
+        }
+    }
+    Ok(())
+}
+
+async fn remove_path_recursive(path: &Path) -> Result<(), ApiError> {
+    let metadata = tokio::fs::metadata(path).await.map_err(AppError::from)?;
+    if metadata.is_dir() {
+        tokio::fs::remove_dir_all(path)
+            .await
+            .map_err(AppError::from)?;
+    } else {
+        tokio::fs::remove_file(path).await.map_err(AppError::from)?;
     }
     Ok(())
 }
@@ -1213,7 +1810,7 @@ fn safe_path_segment(value: &str, fallback: &str) -> String {
             out.push(ch);
         }
     }
-    let out = out.trim_matches([' ', '.']).trim();
+    let out = out.trim().trim_end_matches([' ', '.']);
     if out.is_empty() {
         fallback.to_string()
     } else {

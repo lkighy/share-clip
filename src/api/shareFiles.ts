@@ -178,8 +178,43 @@ export function cacheRemoteSharedFile(payload: {
   mtime?: number | null;
   hash?: string | null;
   data_base64?: string | null;
+  destination_dir?: string | null;
+  destination_root_relative_path?: string | null;
 }) {
   return call<string>("cache_remote_shared_file", { payload });
+}
+
+export type RemoteDownloadProgressPayload = {
+  transfer_task_id: string;
+  relative_path: string;
+  loaded: number;
+  total?: number | null;
+  progress: number;
+};
+
+export const REMOTE_DOWNLOAD_PROGRESS_EVENT = "share://remote-download-progress";
+
+export function downloadRemoteSharedFile(payload: {
+  remote_user_id: string;
+  base_url: string;
+  auth_user_id: string;
+  auth_device_id: string;
+  share_id: string;
+  share_name: string;
+  relative_path: string;
+  name: string;
+  size?: number | null;
+  mtime?: number | null;
+  hash?: string | null;
+  transfer_task_id?: string | null;
+  destination_dir?: string | null;
+  destination_root_relative_path?: string | null;
+}) {
+  return call<string>("download_remote_shared_file", { payload });
+}
+
+export function validateEmptyDirectory(path: string) {
+  return call<void>("validate_empty_directory", { payload: { path } });
 }
 
 export function revealRemoteSharedCache(payload: {
@@ -196,4 +231,13 @@ export function removeRemoteSharedCache(payload: {
   relative_path: string;
 }) {
   return call<void>("remove_remote_shared_cache", { payload });
+}
+
+export function moveRemoteSharedCache(payload: {
+  remote_user_id: string;
+  share_id: string;
+  relative_path: string;
+  destination_dir: string;
+}) {
+  return call<string>("move_remote_shared_cache", { payload });
 }

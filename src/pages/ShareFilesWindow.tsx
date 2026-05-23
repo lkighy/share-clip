@@ -2,6 +2,7 @@ import type { MouseEvent } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { listen } from "@tauri-apps/api/event";
+import { open } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
 import {
   ArrowLeft,
@@ -41,6 +42,7 @@ import { scanLanShareDevices, type LanDiscoveredDevice } from "@/api/appConfig";
 import {
   addManualSharedPaths,
   cacheRemoteSharedFile,
+  downloadRemoteSharedFile,
   getRemoteCacheStatus,
   getLocalSharedFileThumbnail,
   listInboundConnectionRequests,
@@ -48,6 +50,8 @@ import {
   listRemoteCachedFiles,
   listRemoteShareUsers,
   listWebAccessRequests,
+  moveRemoteSharedCache,
+  REMOTE_DOWNLOAD_PROGRESS_EVENT,
   refreshLocalShareIndexes,
   removeRemoteShareUser,
   removeRemoteSharedCache,
@@ -58,12 +62,14 @@ import {
   toggleLocalSharedFileFavorite,
   type InboundConnectionRequest,
   type LocalSharedFileItem,
+  type RemoteDownloadProgressPayload,
   type RemoteCachedFileItem,
   type RemoteShareUser,
   type WebAccessRequest,
   updateRemoteShareUserAuthStatus,
   upsertRemoteShareUser,
   unshareLocalSharedFile,
+  validateEmptyDirectory,
 } from "@/api/shareFiles";
 
 type ViewMode = "icons" | "tiles" | "details";
@@ -147,6 +153,11 @@ type RemoteSyncFile = RemoteSyncDirectory & {
   size?: number | null;
 };
 
+type RemoteTransferDestination = {
+  directory: string;
+  rootRelativePath: string;
+};
+
 type ReactMouseEvent = React.MouseEvent<HTMLElement>;
 
 type ConnectionStatusResponse = {
@@ -161,12 +172,6 @@ type ConnectionStatusResponse = {
 type RemoteAuthHeaders = {
   userId: string;
   deviceId: string;
-};
-
-type TransferProgress = {
-  loaded: number;
-  total?: number | null;
-  progress: number;
 };
 
 type ConnectionDialogMode = "add" | "edit" | "reauth" | "lan";
@@ -332,7 +337,7 @@ function cleanDisplayName(raw: string | undefined, fallback: string) {
   const source = (raw || fallback).trim();
   const parts = source.split(/[\\/]/);
   const base = parts[parts.length - 1] || source;
-  return base.replace(/^[^\w\u4e00-\u9fa5]+/, "").replace(/\s+\([^)]+\)\s*$/, "");
+  return base.replace(/\s+\([^)]+\)\s*$/, "") || fallback;
 }
 
 function sortLocalSharedFiles(items: LocalSharedFileItem[]) {
@@ -430,61 +435,6 @@ async function fetchRemoteIndex(baseUrl: string, shareId: string, auth: RemoteAu
   return items;
 }
 
-async function fetchRemoteFileBlob(
-  baseUrl: string,
-  shareId: string,
-  relativePath: string,
-  auth: RemoteAuthHeaders,
-  onProgress?: (progress: TransferProgress) => void,
-) {
-  const response = await fetch(
-    `${baseUrl}/api/client/shares/${encodeURIComponent(shareId)}/download?path=${encodeURIComponent(relativePath)}`,
-    { headers: remoteAuthHeaders(auth) },
-  );
-  if (!response.ok) await throwRemoteHttpError(response, "下载远程文件失败");
-  const total = Number(response.headers.get("content-length") || "0") || null;
-  const reader = response.body?.getReader();
-  if (!reader) {
-    const blob = await response.blob();
-    onProgress?.({
-      loaded: blob.size,
-      total: total ?? blob.size,
-      progress: total ? (blob.size / total) * 100 : 100,
-    });
-    return blob;
-  }
-
-  const chunks: Uint8Array[] = [];
-  let loaded = 0;
-  onProgress?.({ loaded, total, progress: 0 });
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    if (!value) continue;
-    chunks.push(value);
-    loaded += value.byteLength;
-    onProgress?.({
-      loaded,
-      total,
-      progress: total ? (loaded / total) * 100 : 0,
-    });
-  }
-  onProgress?.({ loaded, total: total ?? loaded, progress: 100 });
-  return new Blob(chunks);
-}
-
-async function blobToBase64(blob: Blob) {
-  return new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = String(reader.result || "");
-      resolve(result.includes(",") ? result.slice(result.indexOf(",") + 1) : result);
-    };
-    reader.onerror = () => reject(reader.error || new Error("读取文件内容失败"));
-    reader.readAsDataURL(blob);
-  });
-}
-
 function cachedItemToRemoteShare(item: RemoteCachedFileItem, remoteDeleted: boolean): RemoteShareItem {
   return {
     id: item.share_id,
@@ -567,6 +517,7 @@ export default function ShareFilesWindow() {
   const [connectingLanDeviceId, setConnectingLanDeviceId] = useState<string | null>(null);
   const activeTransferItemKeysRef = useRef(new Set<string>());
   const transferTaskItemKeyByIdRef = useRef(new Map<string, string>());
+  const transferTaskByIdRef = useRef(new Map<string, TransferTask>());
   const activeRemote = useMemo(
     () => (tab.startsWith("remote:") ? remoteUsers.find((u) => `remote:${u.user_id}` === tab) : null),
     [remoteUsers, tab],
@@ -644,6 +595,10 @@ export default function ShareFilesWindow() {
   useEffect(() => {
     void loadAppConfig();
   }, []);
+
+  useEffect(() => {
+    transferTaskByIdRef.current = new Map(transferTasks.map((task) => [task.id, task]));
+  }, [transferTasks]);
 
   useEffect(() => {
     if (!appConfig || shareFilesPrefsReady) return;
@@ -775,6 +730,45 @@ export default function ShareFilesWindow() {
     );
   };
 
+  const selectEmptyDestinationDirectory = async () => {
+    const selected = await open({
+      directory: true,
+      multiple: false,
+      title: "选择空文件夹",
+    });
+    if (typeof selected !== "string") return null;
+    await validateEmptyDirectory(selected);
+    return selected;
+  };
+
+  const downloadRemoteFileToCache = async (
+    target: RemoteContextTarget,
+    taskId: string,
+    file: RemoteSyncFile,
+    destination?: RemoteTransferDestination | null,
+  ) => {
+    if (!activeRemote || !activeRemoteAuth || !activeRemoteBaseUrl) {
+      throw new Error("远程设备未准备好");
+    }
+    const relativePath = normalizeRemoteTaskPath(file.relativePath);
+    return downloadRemoteSharedFile({
+      remote_user_id: activeRemote.user_id,
+      base_url: activeRemoteBaseUrl,
+      auth_user_id: activeRemoteAuth.userId,
+      auth_device_id: activeRemoteAuth.deviceId,
+      share_id: target.shareId,
+      share_name: target.shareName,
+      relative_path: relativePath,
+      name: file.name,
+      size: file.size ?? null,
+      mtime: file.mtime ?? null,
+      hash: file.hash ?? null,
+      transfer_task_id: taskId,
+      destination_dir: destination?.directory ?? null,
+      destination_root_relative_path: destination?.rootRelativePath ?? null,
+    });
+  };
+
   const markRemoteTargetCached = (target: RemoteContextTarget, localCachePath: string) => {
     const relativePath = normalizeRemoteTaskPath(target.relativePath);
     const patch = {
@@ -833,32 +827,12 @@ export default function ShareFilesWindow() {
 
     try {
       updateTransferTask(task.id, { status: "running", message: "下载中" });
-      const blob = await fetchRemoteFileBlob(
-        activeRemoteBaseUrl,
-        target.shareId,
-        target.relativePath,
-        activeRemoteAuth,
-        ({ loaded, total, progress }) => {
-          updateTransferTask(task.id, {
-            loadedBytes: loaded,
-            totalBytes: total ?? target.size ?? null,
-            progress,
-          });
-        },
-      );
-      updateTransferTask(task.id, { message: "保存到缓存" });
-      const dataBase64 = await blobToBase64(blob);
-      const localCachePath = await cacheRemoteSharedFile({
-        remote_user_id: activeRemote.user_id,
-        share_id: target.shareId,
-        share_name: target.shareName,
-        relative_path: normalizeRemoteTaskPath(target.relativePath),
+      const localCachePath = await downloadRemoteFileToCache(target, task.id, {
+        relativePath: normalizeRemoteTaskPath(target.relativePath),
         name: target.name,
-        is_dir: false,
-        size: target.size ?? blob.size,
+        size: target.size ?? null,
         mtime: target.mtime ?? null,
         hash: target.hash ?? null,
-        data_base64: dataBase64,
       });
       markRemoteTargetCached(target, localCachePath);
       finishTransferTask(task.id, "done", "已完成");
@@ -876,7 +850,7 @@ export default function ShareFilesWindow() {
     }
   };
 
-  const syncRemoteTarget = async (target: RemoteContextTarget) => {
+  const syncRemoteTarget = async (target: RemoteContextTarget, destination?: RemoteTransferDestination | null) => {
     if (!activeRemoteAuth || !activeRemote || !activeRemoteBaseUrl) return false;
 
     const task = createTransferTask(target, "sync");
@@ -922,48 +896,41 @@ export default function ShareFilesWindow() {
 
       const syncFile = async (
         file: RemoteSyncFile,
-        onProgress?: (progress: TransferProgress) => void,
+        taskId: string,
       ) => {
         const relativePath = normalizeRemoteTaskPath(file.relativePath);
         const size = file.size ?? null;
         const mtime = file.mtime ?? null;
         const hash = file.hash ?? null;
-        const cacheStatus = await getRemoteCacheStatus({
-          remote_user_id: activeRemote.user_id,
-          share_id: target.shareId,
-          relative_path: relativePath,
-          size,
-          mtime,
-          hash,
-        });
-        if (cacheStatus.cached) {
-          onProgress?.({
-            loaded: size ?? cacheStatus.size ?? 0,
-            total: size ?? cacheStatus.size ?? null,
-            progress: 100,
+        if (!destination) {
+          const cacheStatus = await getRemoteCacheStatus({
+            remote_user_id: activeRemote.user_id,
+            share_id: target.shareId,
+            relative_path: relativePath,
+            size,
+            mtime,
+            hash,
           });
-          return {
-            bytes: size ?? cacheStatus.size ?? 0,
-            cached: true,
-            localCachePath: cacheStatus.local_cache_path ?? null,
-          };
+          if (cacheStatus.cached) {
+            return {
+              bytes: size ?? cacheStatus.size ?? 0,
+              cached: true,
+              localCachePath: cacheStatus.local_cache_path ?? null,
+            };
+          }
         }
 
-        const blob = await fetchRemoteFileBlob(activeRemoteBaseUrl, target.shareId, relativePath, activeRemoteAuth, onProgress);
-        const dataBase64 = await blobToBase64(blob);
-        const localCachePath = await cacheRemoteSharedFile({
-          remote_user_id: activeRemote.user_id,
-          share_id: target.shareId,
-          share_name: target.shareName,
-          relative_path: relativePath,
+        const localCachePath = await downloadRemoteFileToCache(target, taskId, {
+          relativePath,
           name: file.name,
-          is_dir: false,
           size,
           mtime,
           hash,
-          data_base64: dataBase64,
-        });
-        return { bytes: blob.size, cached: false, localCachePath };
+        }, destination);
+        const latestChild = transferTaskByIdRef.current
+          .get(taskId)
+          ?.children?.find((child) => child.id === relativePath);
+        return { bytes: size ?? latestChild?.loadedBytes ?? 0, cached: false, localCachePath };
       };
 
       if (!target.isDir) {
@@ -978,18 +945,7 @@ export default function ShareFilesWindow() {
           loadedBytes: 0,
           totalBytes: fileMeta.size ?? null,
         }]);
-        const result = await syncFile(fileMeta, ({ loaded, total, progress }) => {
-          updateTransferTask(task.id, {
-            loadedBytes: loaded,
-            totalBytes: total ?? fileMeta.size ?? null,
-            progress,
-          });
-          updateTransferChild(task.id, childId, {
-            loadedBytes: loaded,
-            totalBytes: total ?? fileMeta.size ?? null,
-            progress,
-          });
-        });
+        const result = await syncFile(fileMeta, task.id);
         updateTransferChild(task.id, childId, {
           status: result.cached ? "cached" : "done",
           progress: 100,
@@ -1010,7 +966,7 @@ export default function ShareFilesWindow() {
           );
         }
         finishTransferTask(task.id, "done", "已完成");
-        toast.success(result.cached ? `已使用本地缓存 ${target.name}` : `已同步文件 ${target.name}`);
+        toast.success(destination ? `已同步到所选文件夹 ${target.name}` : result.cached ? `已使用本地缓存 ${target.name}` : `已同步文件 ${target.name}`);
         return true;
       }
 
@@ -1099,6 +1055,8 @@ export default function ShareFilesWindow() {
           mtime: directory.mtime ?? null,
           hash: directory.hash ?? null,
           data_base64: null,
+          destination_dir: destination?.directory ?? null,
+          destination_root_relative_path: destination?.rootRelativePath ?? null,
         });
       }
 
@@ -1124,27 +1082,9 @@ export default function ShareFilesWindow() {
       });
 
       for (const file of files) {
-        const fileStartBytes = completedBytes;
         const childId = normalizeRemoteTaskPath(file.relativePath);
         updateTransferChild(task.id, childId, { status: "running", message: "同步中" });
-        const result = await syncFile(file, ({ loaded, total, progress }) => {
-          const expectedSize = file.size && file.size > 0 ? file.size : total ?? loaded;
-          const loadedWithinFile = Math.min(loaded, expectedSize || loaded);
-          const aggregateProgress =
-            knownTotalBytes > 0
-              ? ((fileStartBytes + loadedWithinFile) / knownTotalBytes) * 100
-              : ((completedFiles + progress / 100) / files.length) * 100;
-          updateTransferTask(task.id, {
-            loadedBytes: knownTotalBytes > 0 ? fileStartBytes + loadedWithinFile : completedFiles,
-            totalBytes: knownTotalBytes > 0 ? knownTotalBytes : null,
-            progress: Math.min(99, aggregateProgress),
-          });
-          updateTransferChild(task.id, childId, {
-            loadedBytes: loaded,
-            totalBytes: total ?? file.size ?? null,
-            progress,
-          });
-        });
+        const result = await syncFile(file, task.id);
         completedBytes += file.size && file.size > 0 ? file.size : result.bytes;
         completedFiles += 1;
         updateTransferChild(task.id, childId, {
@@ -1162,7 +1102,7 @@ export default function ShareFilesWindow() {
       }
 
       finishTransferTask(task.id, "done", "已完成");
-      toast.success(`已同步文件夹 ${target.name}`);
+      toast.success(destination ? `已同步到所选文件夹 ${target.name}` : `已同步文件夹 ${target.name}`);
       return true;
     } catch (error) {
       console.error(error);
@@ -1363,6 +1303,47 @@ export default function ShareFilesWindow() {
     } catch (error) {
       console.error(error);
       const message = error instanceof Error ? error.message : "删除远程缓存失败";
+      toast.error(message);
+    }
+  };
+
+  const handleMoveRemoteCache = async (target: RemoteContextTarget) => {
+    if (!activeRemote) return;
+    try {
+      const directory = await selectEmptyDestinationDirectory();
+      if (!directory) return;
+      const newCachePath = await moveRemoteSharedCache({
+        remote_user_id: activeRemote.user_id,
+        share_id: target.shareId,
+        relative_path: target.relativePath,
+        destination_dir: directory,
+      });
+      markRemoteTargetCached(target, newCachePath);
+      setContextMenu(null);
+      toast.success("已变更缓存位置");
+      if (activeRemoteShareId === target.shareId) {
+        await openRemotePath(remoteCurrentPath ?? ".", target.shareId);
+      } else {
+        await loadRemoteRoot();
+      }
+    } catch (error) {
+      console.error(error);
+      const message = error instanceof Error ? error.message : "变更缓存位置失败";
+      toast.error(message);
+    }
+  };
+
+  const handleSyncRemoteToDirectory = async (target: RemoteContextTarget) => {
+    try {
+      const directory = await selectEmptyDestinationDirectory();
+      if (!directory) return;
+      await syncRemoteTarget(target, {
+        directory,
+        rootRelativePath: normalizeRemoteTaskPath(target.relativePath),
+      });
+    } catch (error) {
+      console.error(error);
+      const message = error instanceof Error ? error.message : "选择目标文件夹失败";
       toast.error(message);
     }
   };
@@ -1991,6 +1972,41 @@ export default function ShareFilesWindow() {
   useEffect(() => {
     const unlisten = listen("share://local-files-changed", () => {
       void loadMySharedFiles();
+    });
+    return () => {
+      unlisten.then((off) => off());
+    };
+  }, []);
+
+  useEffect(() => {
+    const unlisten = listen<RemoteDownloadProgressPayload>(REMOTE_DOWNLOAD_PROGRESS_EVENT, (event) => {
+      const payload = event.payload;
+      const childId = normalizeRemoteTaskPath(payload.relative_path);
+      const task = transferTaskByIdRef.current.get(payload.transfer_task_id);
+      const completedBefore = task?.children
+        ?.filter((child) => child.id !== childId && (child.status === "done" || child.status === "cached"))
+        .reduce((sum, child) => sum + (child.totalBytes ?? child.loadedBytes ?? 0), 0) ?? 0;
+      const taskTotal = task?.totalBytes ?? null;
+      const completedCount = task?.children
+        ?.filter((child) => child.id !== childId && (child.status === "done" || child.status === "cached"))
+        .length ?? 0;
+      const aggregateProgress =
+        task?.isDir && task.children?.length
+          ? taskTotal && taskTotal > 0
+            ? ((completedBefore + payload.loaded) / taskTotal) * 100
+            : ((completedCount + payload.progress / 100) / task.children.length) * 100
+          : payload.progress;
+
+      updateTransferTask(payload.transfer_task_id, {
+        loadedBytes: task?.isDir && taskTotal && taskTotal > 0 ? completedBefore + payload.loaded : payload.loaded,
+        totalBytes: taskTotal ?? payload.total ?? null,
+        progress: Math.min(99, aggregateProgress),
+      });
+      updateTransferChild(payload.transfer_task_id, childId, {
+        loadedBytes: payload.loaded,
+        totalBytes: payload.total ?? null,
+        progress: payload.progress,
+      });
     });
     return () => {
       unlisten.then((off) => off());
@@ -2803,44 +2819,46 @@ export default function ShareFilesWindow() {
           {contextMenu.type === "remote" && contextMenu.remote ? (
             <>
               {!contextMenu.remote.remoteDeleted ? (
-                <button
-                  className="flex w-full items-center gap-2 rounded px-3 py-1.5 text-left text-sm text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
-                  disabled={
-                    Boolean(
-                      activeRemote &&
-                        transferProgressByItem.has(remoteTransferItemKey(activeRemote.user_id, contextMenu.remote.shareId, contextMenu.remote.relativePath)),
-                    )
-                  }
-                  onClick={() => {
-                    const target = contextMenu.remote;
-                    setContextMenu(null);
-                    if (!target) return;
-                    void downloadRemoteTarget(target);
-                  }}
-                >
-                  <Download size={14} />
-                  下载
-                </button>
-              ) : null}
-              {!contextMenu.remote.remoteDeleted ? (
-                <button
-                  className="flex w-full items-center gap-2 rounded px-3 py-1.5 text-left text-sm text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
-                  disabled={
-                    Boolean(
-                      activeRemote &&
-                        transferProgressByItem.has(remoteTransferItemKey(activeRemote.user_id, contextMenu.remote.shareId, contextMenu.remote.relativePath)),
-                    )
-                  }
-                  onClick={() => {
-                    const target = contextMenu.remote;
-                    setContextMenu(null);
-                    if (!target) return;
-                    void syncRemoteTarget(target);
-                  }}
-                >
-                  <RefreshCcw size={14} />
-                  同步
-                </button>
+                <>
+                  <button
+                    className="flex w-full items-center gap-2 rounded px-3 py-1.5 text-left text-sm text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                    disabled={
+                      Boolean(
+                        activeRemote &&
+                          transferProgressByItem.has(remoteTransferItemKey(activeRemote.user_id, contextMenu.remote.shareId, contextMenu.remote.relativePath)),
+                      )
+                    }
+                    onClick={() => {
+                      const target = contextMenu.remote;
+                      setContextMenu(null);
+                      if (!target) return;
+                      void syncRemoteTarget(target);
+                    }}
+                  >
+                    <RefreshCcw size={14} />
+                    同步
+                  </button>
+                  {!contextMenu.remote.localCachePath ? (
+                    <button
+                      className="flex w-full items-center gap-2 rounded px-3 py-1.5 text-left text-sm text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                      disabled={
+                        Boolean(
+                          activeRemote &&
+                            transferProgressByItem.has(remoteTransferItemKey(activeRemote.user_id, contextMenu.remote.shareId, contextMenu.remote.relativePath)),
+                        )
+                      }
+                      onClick={() => {
+                        const target = contextMenu.remote;
+                        setContextMenu(null);
+                        if (!target) return;
+                        void handleSyncRemoteToDirectory(target);
+                      }}
+                    >
+                      <FolderOpen size={14} />
+                      同步到
+                    </button>
+                  ) : null}
+                </>
               ) : null}
               {contextMenu.remote.localCachePath ? (
                 <button
@@ -2858,6 +2876,20 @@ export default function ShareFilesWindow() {
                 >
                   <FolderOpen size={14} />
                   打开文件所在位置
+                </button>
+              ) : null}
+              {contextMenu.remote.localCachePath ? (
+                <button
+                  className="flex w-full items-center gap-2 rounded px-3 py-1.5 text-left text-sm text-slate-700 hover:bg-slate-100"
+                  onClick={() => {
+                    const target = contextMenu.remote;
+                    setContextMenu(null);
+                    if (!target) return;
+                    void handleMoveRemoteCache(target);
+                  }}
+                >
+                  <FolderOpen size={14} />
+                  变更缓存位置
                 </button>
               ) : null}
               {contextMenu.remote.localCachePath ? (
